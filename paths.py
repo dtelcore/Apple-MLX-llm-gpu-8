@@ -38,6 +38,10 @@ DEFAULT_TRAINING_LOG = OUTPUT_LOGS / "training.log"
 DEFAULT_TRAINING_PLOT = OUTPUT_LOGS / "training_plot_latest.png"
 DEFAULT_LANDSCAPE_PLOT = OUTPUT_LOGS / "loss_landscape_latest.png"
 
+# Bundled first-run defaults (committed). Copied into output/ / data/ when missing.
+BUNDLED_DEFAULT_CONFIG = SETUP_DIR / "story_sub1m_config.json"
+BUNDLED_SMOKE_CORPUS = SETUP_DIR / "smoke_english.txt"
+
 # Legacy locations (pre-output/ migration) — still honored when passed explicitly.
 LEGACY_LOGS_DIR = PROJECT_ROOT / "logs"
 LEGACY_MODELS_DIR = PROJECT_ROOT / "models"

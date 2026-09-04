@@ -71,6 +71,12 @@ class CombinedDirectoryTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 loader.load_combined_directory(tmp)
 
+    def test_empty_temp_dir_does_not_seed_bundled_smoke(self):
+        """Seeding only happens for the project data/ directory, not caller temp dirs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                resolve_dataset_corpus({"name": "data_dir", "combine": True}, data_dir=tmp)
+
     def test_blank_only_files_raise(self):
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)

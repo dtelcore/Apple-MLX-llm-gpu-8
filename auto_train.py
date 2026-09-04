@@ -14,6 +14,7 @@ Usage:
     python auto_train.py --epochs 5 --prompt "once upon a" --trace-logits
     python auto_train.py --steps 1500 --prompt "once upon a"
     python auto_train.py --learning-rate 0.005 --steps 500 --no-prompt   # fully non-interactive
+    python auto_train.py --steps 20 --prompt "once upon a" --no-prompt   # first-run smoke (bundled recipe + data/)
     python auto_train.py --menu        # wizard: Toy Run or Tiny Stories presets, or custom
     python auto_train.py --resume --checkpoint output/checkpoints/run1/quarter_50 --steps 500
 

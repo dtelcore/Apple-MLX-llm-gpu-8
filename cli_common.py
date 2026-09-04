@@ -7,15 +7,18 @@ and interactive.py so trace flags and paths stay consistent across CLIs.
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from model.trace import TraceContext
 from logging_config import logger
 from paths import (
+    BUNDLED_DEFAULT_CONFIG,
     DEFAULT_CHECKPOINT_DIR,
     DEFAULT_CONFIG_PATH,
     LEGACY_CONFIG_PATH,
+    ensure_output_dirs,
     resolve_checkpoints_dir,
 )
 from tokenizer.factory import DEFAULT_BPE_MERGES, DEFAULT_TOKENIZER
@@ -62,7 +65,10 @@ def add_runtime_observability_args(parser: argparse.ArgumentParser) -> None:
 
 def add_config_arg(parser: argparse.ArgumentParser, default: Optional[str] = None) -> None:
     default_path = str(default or DEFAULT_CONFIG_PATH)
-    parser.add_argument("--config", type=str, default=default_path, help="Path to training_config.json")
+    parser.add_argument(
+        "--config", type=str, default=default_path,
+        help="Path to training_config.json (missing default copies setup/story_sub1m_config.json)",
+    )
 
 
 def add_training_length_args(parser: argparse.ArgumentParser) -> None:
@@ -272,14 +278,34 @@ def build_tracer(args, default_trace_every: int = 100) -> TraceContext:
 def load_config(path: str) -> Dict:
     config_path = Path(path)
     if not config_path.exists():
-        if config_path.resolve() == DEFAULT_CONFIG_PATH.resolve() and LEGACY_CONFIG_PATH.exists():
-            logger.info(
-                "Config not found at %s; falling back to legacy %s",
-                DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH,
-            )
-            config_path = LEGACY_CONFIG_PATH
+        if config_path.resolve() == DEFAULT_CONFIG_PATH.resolve():
+            config_path = _resolve_missing_default_config()
+        else:
+            raise FileNotFoundError(f"Training config not found: {config_path}")
     with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _resolve_missing_default_config() -> Path:
+    """When output/configs/training_config.json is absent, use legacy then bundled recipe."""
+    if LEGACY_CONFIG_PATH.exists():
+        logger.info(
+            "Config not found at %s; falling back to legacy %s",
+            DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH,
+        )
+        return LEGACY_CONFIG_PATH
+    if BUNDLED_DEFAULT_CONFIG.exists():
+        ensure_output_dirs()
+        shutil.copy2(BUNDLED_DEFAULT_CONFIG, DEFAULT_CONFIG_PATH)
+        logger.info(
+            "Config not found at %s; copied bundled %s -> %s",
+            DEFAULT_CONFIG_PATH, BUNDLED_DEFAULT_CONFIG, DEFAULT_CONFIG_PATH,
+        )
+        return DEFAULT_CONFIG_PATH
+    raise FileNotFoundError(
+        f"No training config at {DEFAULT_CONFIG_PATH}, {LEGACY_CONFIG_PATH}, "
+        f"or bundled {BUNDLED_DEFAULT_CONFIG}."
+    )
 
 
 def _checkpoint_label(path: Path) -> str:
