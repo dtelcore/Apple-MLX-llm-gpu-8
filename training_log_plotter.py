@@ -560,6 +560,19 @@ def _to_arr(values: Sequence[Optional[float]]) -> np.ndarray:
     return np.array([np.nan if v is None else float(v) for v in values], dtype=float)
 
 
+def _effective_smooth_window(n_points: int, window: int) -> int:
+    """Shrink the rolling window when few log lines exist.
+
+    Default --log-every 100 plus a 1000-step tail is ~10 points. A window of 21
+    then averages the whole curve into a horizontal line. Cap at ~1/3 of points.
+    """
+    w = max(1, int(window))
+    n = max(0, int(n_points))
+    if n <= 2:
+        return 1
+    return min(w, max(1, n // 3))
+
+
 def _rolling_mean(values: Sequence[Optional[float]], window: int) -> np.ndarray:
     """Centered rolling mean, NaN-aware. Vectorized via cumulative sums so it
     stays O(n) regardless of window size -- the naive per-index-slice loop
@@ -568,6 +581,7 @@ def _rolling_mean(values: Sequence[Optional[float]], window: int) -> np.ndarray:
     tens of thousands of steps."""
     arr = _to_arr(values)
     n = len(arr)
+    window = _effective_smooth_window(n, window)
     if n == 0 or window <= 1:
         return arr.copy()
 
@@ -746,7 +760,7 @@ def _apply_style() -> None:
         "axes.edgecolor":     "#2a2f3d",
         "axes.labelcolor":    "#c8cdd8",
         "axes.titlesize":     13,
-        "axes.titleweight":   "semibold",
+        "axes.titleweight":   "bold",
         "axes.titlecolor":    "#e2e6f0",
         "axes.labelsize":     10,
         "grid.color":         "#252b3b",
@@ -806,11 +820,14 @@ def _lock_ylim_from_values(
         lo = float(arr.min())
         hi = float(arr.max())
 
+    mag = max(abs(lo), abs(hi), abs(last), 1e-12)
+    # 0.01 was meant for CE-loss scale; it pins LR (~3e-4) to a 0–0.01 axis.
+    min_abs = 0.02 if mag >= 0.05 else mag * 0.08
     if hi <= lo:
-        pad = max(0.02, abs(lo) * pad_frac + 1e-4)
+        pad = max(min_abs, mag * pad_frac)
         lo, hi = lo - pad, hi + pad
     else:
-        pad = max((hi - lo) * pad_frac, abs(hi) * 0.02, 0.01)
+        pad = max((hi - lo) * pad_frac, mag * 0.02, min_abs * 0.25)
         lo, hi = lo - pad, hi + pad
 
     if floor_zero:
@@ -897,12 +914,15 @@ def _draw_loss_axis(ax, runs: Sequence[RunSeries], smooth_window: int, ema_alpha
         ma = _rolling_mean(raw, smooth_window)
         y_for_scale.extend(float(v) for v in ma if np.isfinite(v))
 
-        if show_raw:
+        sparse = len(run.steps) < 40
+        if show_raw or sparse:
             raw_arr = _to_arr(raw)
             y_for_scale.extend(float(v) for v in raw_arr if np.isfinite(v))
             _plot_with_gaps(
                 ax, run.steps, raw_arr, max_step_gap=max_step_gap,
-                color=color, lw=0.8, alpha=min(raw_alpha, 0.12), zorder=1,
+                color=color, lw=0.8,
+                alpha=max(raw_alpha, 0.35) if sparse else min(raw_alpha, 0.12),
+                zorder=1,
             )
 
         last_val = _nan_safe(ma)
@@ -1010,7 +1030,7 @@ def _draw_metric_axis(ax, runs: Sequence[RunSeries], metric_name: str,
             y_for_scale.extend(float(v) for v in arr if np.isfinite(v))
             _plot_with_gaps(
                 ax, run.steps, arr, max_step_gap=max_step_gap,
-                color=color, lw=0.8, alpha=min(raw_alpha, 0.14), zorder=1,
+                color=color, lw=0.8, alpha=max(raw_alpha, 0.40) if len(run.steps) < 40 else min(raw_alpha, 0.14), zorder=1,
             )
 
         last_val = _nan_safe(ma)
@@ -1172,7 +1192,7 @@ def plot_runs_liveable(
     plt.ion() if live else plt.ioff()
     fig = plt.figure(figsize=(15.0, 8.8))
     fig.suptitle("Training run monitor", fontsize=14, color="#e2e6f0",
-                 fontweight="semibold", y=0.98)
+                 fontweight="bold", y=0.98)
 
     last_summary_key: Optional[Tuple] = None
 

@@ -67,6 +67,7 @@ from training.eval import (
     evaluate_val_loss,
     perplexity_from_loss,
 )
+from training.memory_preflight import assert_gpt_train_fits_budget, n_params_from_gpt_config
 from training.loss import softmax_cross_entropy_batch, softmax_cross_entropy_batch_gpu, trace_predictions
 from training.gpu_optimizer import AdamWGPU
 from training.probe import (
@@ -528,6 +529,9 @@ def train(args: argparse.Namespace) -> str:
         else:
             cli_common.prompt_model_hyperparams(args, config["model"], hyperparams)
         tokenizer, gpt_config = build_tokenizer_and_config(config, args)
+        assert_gpt_train_fits_budget(
+            gpt_config, hyperparams, n_params_from_gpt_config(gpt_config),
+        )
         params = ModelParameters(gpt_config, init_scales=config.get("weight_initialization", {}), seed=args.seed)
     else:
         # Resume: batch/accum/checkpointing flags apply when explicitly set.
@@ -541,6 +545,7 @@ def train(args: argparse.Namespace) -> str:
         elif getattr(args, "grad_checkpoint", None):
             gpt_config.gradient_checkpointing = True
             config["model"]["gradient_checkpointing"] = True
+        assert_gpt_train_fits_budget(gpt_config, hyperparams, params.param_count())
 
     # 90/10 val holdout (stable across resume when val_corpus.json is present).
     train_corpus, val_corpus = ensure_train_val_split(config, seed=args.seed)
