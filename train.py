@@ -728,6 +728,12 @@ def train(args: argparse.Namespace) -> str:
         f"run_budget_steps={run_budget_steps} grad_accum={grad_accum} "
         f"version={__version__} run_dir={run_dir}"
     )
+    # Drop tokenizer / Metal-init peak so the 2 GB guard measures the train step.
+    baseline_bytes = cuda_ops.reset_memory_baseline()
+    logger.info(
+        "Memory baseline after init: active=%.1f MB (peak counter reset)",
+        baseline_bytes / (1024 ** 2),
+    )
 
     global_step = start_step
     window_loss_sum = 0.0

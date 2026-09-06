@@ -10,7 +10,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from model.mlx.env import PROCESS_BUDGET_BYTES, MemoryBudgetError
+from model.mlx.env import (
+    PEAK_TRANSIENT_BYTES,
+    PROCESS_BUDGET_BYTES,
+    MemoryBudgetError,
+    process_budget_exceeded,
+)
 from training.memory_preflight import assert_train_fits_budget, estimate_train_step_bytes
 
 
@@ -62,6 +67,26 @@ class TrainMemoryPreflightTests(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("L=32", msg)
         self.assertIn("2 GB", msg)
+
+    def test_peak_transient_does_not_trip_when_active_is_under(self):
+        active = 638 * 1024 * 1024
+        peak = PROCESS_BUDGET_BYTES + 20 * 1024 * 1024  # the run8+16 first-step miss
+        self.assertFalse(
+            process_budget_exceeded(active, peak, PROCESS_BUDGET_BYTES, PEAK_TRANSIENT_BYTES)
+        )
+        self.assertTrue(
+            process_budget_exceeded(
+                PROCESS_BUDGET_BYTES + 1, peak, PROCESS_BUDGET_BYTES, PEAK_TRANSIENT_BYTES
+            )
+        )
+        self.assertTrue(
+            process_budget_exceeded(
+                active,
+                PROCESS_BUDGET_BYTES + PEAK_TRANSIENT_BYTES + 1,
+                PROCESS_BUDGET_BYTES,
+                PEAK_TRANSIENT_BYTES,
+            )
+        )
 
 
 if __name__ == "__main__":
