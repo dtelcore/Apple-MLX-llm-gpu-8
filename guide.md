@@ -1,3 +1,11 @@
+# Apple MLX / Kepler guide
+
+**This tree is the Apple MLX port (MacBook Air M3, 8 GB unified, 2 GB process cap).**
+Current release: **v0.0.4** — memory controller + sequential-layer seam. Start with
+[`README.md`](README.md). Kepler GT 730 notes below are leftover host-CLI docs.
+
+---
+
 # GT 730 quick guide — story training (2026 recipe)
 
 Fast path to train on Kepler GT 730. Full reference: [`README.md`](README.md) · CLI catalog: [`py_calls.md`](py_calls.md).

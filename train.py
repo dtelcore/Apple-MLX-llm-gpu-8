@@ -68,7 +68,8 @@ from training.eval import (
     perplexity_from_loss,
 )
 from training.layer_health import format_layer_grad_line, summarize_layer_grad_norms
-from training.memory_preflight import assert_gpt_train_fits_budget, n_params_from_gpt_config
+from training.memory_controller import apply_train_plan
+from training.memory_preflight import n_params_from_gpt_config
 from training.loss import softmax_cross_entropy_batch, softmax_cross_entropy_batch_gpu, trace_predictions
 from training.gpu_optimizer import AdamWGPU
 from training.probe import (
@@ -530,8 +531,15 @@ def train(args: argparse.Namespace) -> str:
         else:
             cli_common.prompt_model_hyperparams(args, config["model"], hyperparams)
         tokenizer, gpt_config = build_tokenizer_and_config(config, args)
-        assert_gpt_train_fits_budget(
-            gpt_config, hyperparams, n_params_from_gpt_config(gpt_config),
+        apply_train_plan(
+            gpt_config,
+            hyperparams,
+            n_params_from_gpt_config(gpt_config),
+            model_dict=config["model"],
+            config=config,
+            autoscale=not getattr(args, "no_autoscale", False),
+            headroom=float(getattr(args, "memory_headroom", None) or 0.15),
+            allow_checkpoint=not getattr(args, "no_grad_checkpoint", False),
         )
         params = ModelParameters(gpt_config, init_scales=config.get("weight_initialization", {}), seed=args.seed)
     else:
@@ -546,7 +554,16 @@ def train(args: argparse.Namespace) -> str:
         elif getattr(args, "grad_checkpoint", None):
             gpt_config.gradient_checkpointing = True
             config["model"]["gradient_checkpointing"] = True
-        assert_gpt_train_fits_budget(gpt_config, hyperparams, params.param_count())
+        apply_train_plan(
+            gpt_config,
+            hyperparams,
+            params.param_count(),
+            model_dict=config["model"],
+            config=config,
+            autoscale=not getattr(args, "no_autoscale", False),
+            headroom=float(getattr(args, "memory_headroom", None) or 0.15),
+            allow_checkpoint=not getattr(args, "no_grad_checkpoint", False),
+        )
 
     # 90/10 val holdout (stable across resume when val_corpus.json is present).
     train_corpus, val_corpus = ensure_train_val_split(config, seed=args.seed)
@@ -563,8 +580,8 @@ def train(args: argparse.Namespace) -> str:
             cli_common.prompt_training_length_and_lr(args, hyperparams)
     if args.learning_rate is not None:
         hyperparams["learning_rate"] = args.learning_rate
-    if getattr(args, "gradient_accumulation_steps", None) is not None:
-        hyperparams["gradient_accumulation_steps"] = int(args.gradient_accumulation_steps)
+    # Batch/accum were already applied before the memory plan; do not overwrite
+    # the scaled accum here or an explicit --grad-accum undoes autoscale.
     grad_accum = max(1, int(hyperparams.get("gradient_accumulation_steps", 1)))
     hyperparams["gradient_accumulation_steps"] = grad_accum
 
@@ -578,7 +595,13 @@ def train(args: argparse.Namespace) -> str:
         if getattr(args, "window_stride", None) is not None
         else int(hyperparams.get("window_stride", 1))
     )
+    if window_stride >= int(gpt_config.max_len):
+        window_stride = max(1, int(gpt_config.max_len) // 2)
     hyperparams["window_stride"] = window_stride
+    if getattr(args, "generate_probe_tokens", None):
+        args.generate_probe_tokens = min(
+            int(args.generate_probe_tokens), int(gpt_config.max_len),
+        )
 
     model = GPTModel(gpt_config, params)
 

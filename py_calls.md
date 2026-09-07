@@ -1,10 +1,9 @@
 # py_calls.md — runnable entry points
 
-**TinyStories on GT 730:** start with [`guide.md`](guide.md). Activate the project venv first (PyCUDA / sm_35):
+**Apple MLX (this tree, v0.0.4):** MacBook Air M3, 2 GB process cap. Start with
+[`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
 
-```powershell
-.\venv\Scripts\Activate.ps1
-```
+Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
 
 Shared flag groups live in [`cli_common.py`](cli_common.py) and are referenced below as **(shared: …)**.
 
@@ -71,8 +70,12 @@ Shared flag groups live in [`cli_common.py`](cli_common.py) and are referenced b
 | `--run-budget` | int | `None` (absolute quarterly budget) |
 | `--norm-type` | `layernorm`\|`rmsnorm` | `None` (presets → rmsnorm) |
 | `--pos-encoding` | `learned`\|`rope` | `None` (presets → rope) |
-| `--grad-checkpoint` | flag | off | VRAM: recompute attn/MLP in backward (**not** tok/s) |
-| `--no-grad-checkpoint` | flag | off |
+| `--grad-checkpoint` | flag | off (controller may enable under 2 GB) |
+| `--no-grad-checkpoint` | flag | off (then controller shrinks B/T instead) |
+| `--no-autoscale` | flag | off (refuse if 2 GB estimate overflows) |
+| `--memory-headroom` | float | `0.15` (compile slack; does not raise the 2 GB cap) |
+
+v0.0.4: `training/memory_controller.py` autoscales batch/context/activations to the hardcoded 2 GB process cap. Architecture is never changed. See [`README.md`](README.md).
 
 ### Generate probes `(shared: probe)`
 
@@ -487,7 +490,7 @@ These are imported by the entry points above; they have no project-facing argpar
 | Path | Role |
 |------|------|
 | `model/*`, `model/cuda/*` | GPT + kernels / ops / allocator / FP16 storage / graph |
-| `training/*` | dataset, loss, checkpoint, optimizer, probe, quality, eval |
+| `training/*` | dataset, loss, checkpoint, optimizer, probe, quality, eval, **memory_controller** (2 GB autoscale) |
 | `tokenizer/tokenizer.py`, `tokenizer/bpe.py` | Char + experimental BPE |
 | `setup/config_loader.py`, `dataset_setup.py`, `model_config.py`, `training_presets.py`, `weight_init.py` | Setup helpers |
 | `tools/tracing/runtime_metrics.py` | SyncMeter / MemoryTimeline / KernelTimeline (enabled via train flags) |

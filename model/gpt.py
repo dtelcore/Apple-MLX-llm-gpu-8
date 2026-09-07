@@ -203,6 +203,17 @@ class GPTModel:
             return cuda_ops.scale_const(d_stream, scale)
         return d_stream * scale
 
+    def _eval_stream(self, *arrays) -> None:
+        """Realize the residual stream so unused MLX intermediates can free."""
+        if not getattr(self.config, "eval_per_layer", False):
+            return
+        live = [
+            a for a in arrays
+            if a is not None and (hasattr(a, "mx") or type(a).__name__ == "DeviceArray")
+        ]
+        if live:
+            cuda_ops.eval_for_host(*live)
+
     def _residual_norm_with_cache_gpu(self, h_d, residual_d, gamma_d, beta_d=None):
         scale = self._resid_scale()
         if self._use_rmsnorm:
@@ -321,6 +332,7 @@ class GPTModel:
                     tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
 
                 cache["layers"].append(layer_cache)
+                self._eval_stream(h_d)
 
             cache["h_final_d"] = h_final_d
             cache["final_xhat_d"] = final_xhat_d
@@ -393,6 +405,7 @@ class GPTModel:
                 tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
 
             cache["layers"].append(layer_cache)
+            self._eval_stream(h_d)
 
         cache["h_pre_final_ln"] = cuda_ops.to_host(h_d)
         fbeta = None if self._use_rmsnorm else b["final_ln_beta"]
@@ -593,6 +606,7 @@ class GPTModel:
                 grads[f"{prefix}.ln1_beta"] = d_ln1_beta
 
             d_h = cuda_ops.add_into(d_resid0, d_h_from_ln1)
+            self._eval_stream(d_h)
 
         d_tok, d_pos = cuda_ops.embed_backward(
             cache["ids"].astype(np.int32), d_h, cfg.vocab_size, C,
@@ -1245,6 +1259,8 @@ class GPTModel:
             if tracer is not None and tracer.trace_neurons and tracer.active_step:
                 tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
 
+            self._eval_stream(h_d)
+
         logits_d = layers.linear(
             h_final_d, dw["lm_head"], db["lm_head_bias"], tracer=tracer, name="lm_head",
         )
@@ -1339,6 +1355,7 @@ class GPTModel:
             if tracer is not None and tracer.trace_neurons and tracer.active_step:
                 tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
 
+            self._eval_stream(h_d)
             new_layers.append({"k": k_all, "v": v_all})
 
         logits_d = layers.linear(

@@ -182,6 +182,14 @@ def add_model_hyperparam_args(parser: argparse.ArgumentParser) -> None:
         "--no-grad-checkpoint", action="store_true", default=False,
         help="Disable gradient checkpointing (override config)",
     )
+    group.add_argument(
+        "--no-autoscale", action="store_true", default=False,
+        help="Do not shrink batch/context or turn on checkpointing/FP16; refuse if the 2 GB estimate overflows",
+    )
+    group.add_argument(
+        "--memory-headroom", type=float, default=None,
+        help="Fraction of the 2 GB process cap left for compile/scratch (default 0.15). Does not raise the 2 GB cap.",
+    )
 
 
 def prompt_model_hyperparams(args: argparse.Namespace, model_config: Dict, hyperparams: Dict) -> None:

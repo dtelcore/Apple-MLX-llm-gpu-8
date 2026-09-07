@@ -11,9 +11,7 @@ from typing import Mapping, Optional
 
 from logging_config import logger
 from model.mlx.env import PROCESS_BUDGET_BYTES, MemoryBudgetError
-
-_F32 = 4
-_WORKSPACE_RATIO = 0.35
+from training.memory_controller import estimate_train_bytes
 
 
 def estimate_train_step_bytes(
@@ -28,30 +26,16 @@ def estimate_train_step_bytes(
     grad_accum: int = 1,
 ) -> int:
     """Conservative float32 bytes for one optimizer step (weights + VJP cache)."""
-    B = max(1, int(batch_size))
-    T = max(1, int(max_len))
-    C = max(1, int(embedding_dim))
-    H = max(1, int(num_heads))
-    L = max(1, int(num_layers))
-    accum = max(1, int(grad_accum))
-
-    param_bytes = max(0, int(n_params)) * _F32
-    # Host NumPy copy + device mirror + Adam m/v + grads (+ accum buffer).
-    copies = 2 + 2 + 1 + (1 if accum > 1 else 0)
-    resident = param_bytes * copies
-
-    btc = B * T * C * _F32
-    attn_scores = B * H * T * T * _F32
-    mlp = 2 * B * T * (4 * C) * _F32  # expand hidden + GELU
-    # Residual / RMSNorm caches kept per layer for explicit VJPs (~6 BTC).
-    # Q/K/V + attn concat ~4 BTC extra when not checkpointing.
-    if gradient_checkpointing:
-        activations = L * (8 * btc) + attn_scores + 3 * btc + mlp
-    else:
-        activations = L * (10 * btc + attn_scores + mlp)
-
-    workspace = int(_WORKSPACE_RATIO * (resident + activations))
-    return int(resident + activations + workspace)
+    return estimate_train_bytes(
+        n_params=n_params,
+        batch_size=batch_size,
+        max_len=max_len,
+        embedding_dim=embedding_dim,
+        num_heads=num_heads,
+        num_layers=num_layers,
+        gradient_checkpointing=gradient_checkpointing,
+        grad_accum=grad_accum,
+    ).total
 
 
 def n_params_from_gpt_config(gpt_config) -> int:
@@ -119,9 +103,9 @@ def assert_train_fits_budget(
     )
     if estimated > PROCESS_BUDGET_BYTES:
         hint = (
-            "On this 8 GB Air the live path stores explicit VJP activations "
-            "(attention scores per layer). Use story_sub1m (C=128, L=4, T=128) "
-            "or tiny_stories (C=256, L=4, T=128/256, batch=4). L=32 / 25M does not fit."
+            "Disable --no-autoscale so the memory controller can shrink batch/context "
+            "and enable checkpointing. Architecture C/L/H is never changed. "
+            "If weights+Adam alone exceed 2 GB, this recipe cannot run."
         )
         extras = ""
         if extra:

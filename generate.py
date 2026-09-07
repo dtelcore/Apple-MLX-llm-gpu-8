@@ -25,6 +25,7 @@ from logging_config import logger, setup_generate_run_logging
 from model.gpt import GPTModel
 from paths import DEFAULT_CHECKPOINT_DIR, OUTPUT_CHECKPOINTS, ensure_output_dirs
 from training.checkpoint import load_checkpoint
+from training.memory_controller import apply_generate_plan
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -85,13 +86,23 @@ def generate(args: argparse.Namespace) -> str:
     )
 
     gpt_config, params, tokenizer, _, _ = load_checkpoint(args.checkpoint)
-    model = GPTModel(gpt_config, params)
-    tracer = cli_common.build_tracer(args, default_trace_every=1)
-    rng = np.random.default_rng(args.seed)
 
     prompt_ids = tokenizer.encode(args.prompt)
     if not prompt_ids:
         raise ValueError(f"Prompt {args.prompt!r} encodes to zero known tokens for this vocab")
+    plan = apply_generate_plan(
+        gpt_config,
+        params.param_count(),
+        prompt_len=len(prompt_ids),
+        max_new_tokens=int(args.max_new_tokens),
+        use_kv_cache=not getattr(args, "no_kv_cache", False),
+    )
+    if plan.max_new_tokens is not None:
+        args.max_new_tokens = int(plan.max_new_tokens)
+
+    model = GPTModel(gpt_config, params)
+    tracer = cli_common.build_tracer(args, default_trace_every=1)
+    rng = np.random.default_rng(args.seed)
 
     if tracer.any_enabled:
         tokenizer_note = f"vocab_size={tokenizer.vocab_size}"
