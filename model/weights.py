@@ -49,6 +49,8 @@ class ModelParameters:
             self.weights["position_embedding"] = self._init("position_embedding", (max_len, C), max_len, C)
 
         L = self.config.num_layers
+        # Runtime residual_scale already applies 1/sqrt(2L); don't also shrink init.
+        init_depth = 0 if abs(float(getattr(self.config, "residual_scale", 1.0)) - 1.0) > 1e-12 else L
         for layer in range(L):
             prefix = f"layer_{layer}"
 
@@ -56,7 +58,7 @@ class ModelParameters:
             self.biases[f"{prefix}.qkv_bias"] = WeightInitializer.bias_init((3 * C,))
 
             self.weights[f"{prefix}.attn_out_proj"] = self._init(
-                "attention_output_proj", (C, C), C, C, total_layers=L,
+                "attention_output_proj", (C, C), C, C, total_layers=init_depth,
             )
             self.biases[f"{prefix}.attn_out_bias"] = WeightInitializer.bias_init((C,))
 
@@ -74,7 +76,7 @@ class ModelParameters:
             self.biases[f"{prefix}.mlp_expand_bias"] = WeightInitializer.bias_init((4 * C,))
 
             self.weights[f"{prefix}.mlp_contract"] = self._init(
-                "mlp_contract", (4 * C, C), 4 * C, C, total_layers=L,
+                "mlp_contract", (4 * C, C), 4 * C, C, total_layers=init_depth,
             )
             self.biases[f"{prefix}.mlp_contract_bias"] = WeightInitializer.bias_init((C,))
 
@@ -116,7 +118,7 @@ class ModelParameters:
         if scale is None:
             canonical = self._CANONICAL_TYPE.get(layer_type, layer_type)
             scale = WeightInitializer.layer_init_scale(
-                canonical, fan_in, fan_out, total_layers=total_layers or self.config.num_layers,
+                canonical, fan_in, fan_out, total_layers=total_layers,
             )
         return (self._rng.standard_normal(shape) * scale).astype(np.float32)
 

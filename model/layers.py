@@ -46,9 +46,9 @@ def softmax(xd):
     return ops.softmax(xd)
 
 
-def add_residual(a, b):
-    """Elementwise residual add on device."""
-    return ops.add_arrays(a, b)
+def add_residual(a, b, scale: float = 1.0):
+    """Elementwise residual add on device: a + scale * b."""
+    return ops.add_arrays(a, b, scale=scale)
 
 
 def mlp_block_device(

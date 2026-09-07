@@ -660,6 +660,7 @@ _ALIAS_MAP: Dict[str, List[str]] = {
     "tok/s":          ["tok/s", "tok_s", "toks", "tokens_per_sec"],
     "step_ms":        ["step_ms", "stepms", "ms_per_step"],
     "grad_norm":      ["grad_norm", "gradnorm"],
+    "layer_ratio":    ["layer_ratio", "layerratio"],
     "device_used_mb": ["device_used_mb", "device_mb", "gpu_mb"],
     "lr":             ["lr", "learning_rate"],
     "ppl":            ["ppl", "val_ppl", "perplexity"]

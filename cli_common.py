@@ -61,6 +61,10 @@ def add_runtime_observability_args(parser: argparse.ArgumentParser) -> None:
         help="Record ScratchPool alloc/reuse/clear to output/logs/memory_timeline_<run>.jsonl "
              "(implies --runtime-metrics)",
     )
+    group.add_argument(
+        "--no-layer-grads", action="store_true",
+        help="Skip per-layer gradient-norm dump on [train] log lines",
+    )
 
 
 def add_config_arg(parser: argparse.ArgumentParser, default: Optional[str] = None) -> None:

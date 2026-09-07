@@ -170,9 +170,17 @@ def take_row(arr: DeviceArray, index: int, keepdims: bool = False) -> DeviceArra
     return DeviceArray(row)
 
 
-def add_arrays(a: DeviceArray, b: DeviceArray) -> DeviceArray:
+def add_arrays(a: DeviceArray, b: DeviceArray, scale: float = 1.0) -> DeviceArray:
     assert a.shape == b.shape, f"Shape mismatch: {a.shape} vs {b.shape}"
-    return DeviceArray(as_mx(a) + as_mx(b))
+    if scale == 1.0:
+        return DeviceArray(as_mx(a) + as_mx(b))
+    return DeviceArray(as_mx(a) + as_mx(b) * float(scale))
+
+
+def scale_const(arr: DeviceArray, scale: float) -> DeviceArray:
+    if scale == 1.0:
+        return arr
+    return DeviceArray(as_mx(arr) * float(scale))
 
 
 def add_into(a: DeviceArray, b: DeviceArray) -> DeviceArray:
@@ -604,8 +612,9 @@ def residual_layernorm_with_cache(
     gamma: DeviceArray,
     beta: DeviceArray,
     eps: float = 1e-5,
+    scale: float = 1.0,
 ):
-    x_out = DeviceArray(as_mx(x) + as_mx(residual))
+    x_out = DeviceArray(as_mx(x) + as_mx(residual) * float(scale))
     y, xhat, inv = layernorm_with_cache(x_out, gamma, beta, eps=eps)
     return x_out, y, xhat, inv
 
@@ -615,8 +624,9 @@ def residual_rmsnorm_with_cache(
     residual: DeviceArray,
     gamma: DeviceArray,
     eps: float = 1e-5,
+    scale: float = 1.0,
 ):
-    x_out = DeviceArray(as_mx(x) + as_mx(residual))
+    x_out = DeviceArray(as_mx(x) + as_mx(residual) * float(scale))
     y, xhat, inv = rmsnorm_with_cache(x_out, gamma, eps=eps)
     return x_out, y, xhat, inv
 

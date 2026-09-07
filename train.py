@@ -67,6 +67,7 @@ from training.eval import (
     evaluate_val_loss,
     perplexity_from_loss,
 )
+from training.layer_health import format_layer_grad_line, summarize_layer_grad_norms
 from training.memory_preflight import assert_gpt_train_fits_budget, n_params_from_gpt_config
 from training.loss import softmax_cross_entropy_batch, softmax_cross_entropy_batch_gpu, trace_predictions
 from training.gpu_optimizer import AdamWGPU
@@ -802,6 +803,10 @@ def train(args: argparse.Namespace) -> str:
         mean_loss = accum_loss_sum / float(accum_count)
 
         global_norm = optimizer.clip_grads_(accum_grads)
+        will_log = ((global_step + 1) % log_every == 0) or ((global_step + 1) == total_steps)
+        layer_report = None
+        if will_log and not getattr(args, "no_layer_grads", False):
+            layer_report = summarize_layer_grad_norms(accum_grads, gpt_config.num_layers)
         optimizer.step(accum_grads)
 
         step_time_ms = (time.time() - step_start_time) * 1000.0
@@ -864,6 +869,14 @@ def train(args: argparse.Namespace) -> str:
             )
             # Tagged + keyed for training_log_plotter.py / loss_landscape_plotter.py to parse.
             # device_used_mb = process-only (excludes display/HDMI); driver_used includes them.
+            extras = metrics_extra
+            if layer_report is not None:
+                if "grad_norm=" not in extras:
+                    extras += f" grad_norm={global_norm:.4f}"
+                extras += (
+                    f" layer_ratio={layer_report['ratio']:.2f} "
+                    f"layer0_gnorm={layer_report['early']:.4g} layerL_gnorm={layer_report['late']:.4g}"
+                )
             logger.info(
                 f"[train] step={global_step}/{total_steps} epoch={epoch} loss={avg_recent_loss:.4f} "
                 f"ppl={perplexity_from_loss(avg_recent_loss):.4f} "
@@ -871,8 +884,18 @@ def train(args: argparse.Namespace) -> str:
                 f"device_used_mb={used_mb:.0f} vram_free_mb={free_mb:.0f} "
                 f"vram_driver_used_mb={driver_used_mb:.0f} vram_source={mem['source']} "
                 f"elapsed_s={elapsed:.2f} eta_s={eta_seconds:.2f} grad_accum={grad_accum}"
-                + metrics_extra
+                + extras
             )
+            if layer_report is not None:
+                line = format_layer_grad_line(layer_report, step=global_step)
+                print(line)
+                logger.info(line)
+                if not layer_report["healthy"]:
+                    logger.warning(
+                        "layer grad flow looks unhealthy at step %s (ratio=%.2f dead=%s); "
+                        "inspect residual/VJP path if early layers stay near zero",
+                        global_step, layer_report["ratio"], layer_report["dead"],
+                    )
             if want_metrics:
                 runtime_metrics.reset_window()
             cuda_ops.reset_memory_baseline()

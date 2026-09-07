@@ -73,3 +73,20 @@ class TestLayerNormParity(CudaTestCase):
         assert_close("residual_rmsnorm.x_out", ops.to_host(x_out_d), x_out_ref.astype(np.float32))
         assert_close("residual_rmsnorm.y", ops.to_host(y_d), y_ref)
         assert_close("residual_rmsnorm.xhat", ops.to_host(xhat_d), xhat_ref)
+
+    def test_residual_rmsnorm_scaled_branch(self) -> None:
+        ops = self.cuda_ops
+        rng = np.random.default_rng(5)
+        X = rng.standard_normal((B * T, C), dtype=np.float32)
+        R = rng.standard_normal((B * T, C), dtype=np.float32)
+        gamma = rng.standard_normal((C,), dtype=np.float32) * 0.1 + 1.0
+        scale = 1.0 / (2.0 * 6) ** 0.5
+
+        x_out_ref = X + scale * R
+        y_ref, xhat_ref, _inv = rmsnorm_np(x_out_ref, gamma)
+
+        Xd, Rd, gd = ops.to_device(X), ops.to_device(R), ops.to_device(gamma)
+        x_out_d, y_d, xhat_d, _inv_d = ops.residual_rmsnorm_with_cache(Xd, Rd, gd, scale=scale)
+        assert_close("residual_rmsnorm.scale.x_out", ops.to_host(x_out_d), x_out_ref.astype(np.float32))
+        assert_close("residual_rmsnorm.scale.y", ops.to_host(y_d), y_ref)
+        assert_close("residual_rmsnorm.scale.xhat", ops.to_host(xhat_d), xhat_ref)

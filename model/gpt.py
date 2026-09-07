@@ -191,10 +191,25 @@ class GPTModel:
             return cuda_ops.rmsnorm_with_cache(h_d, gamma_d)
         return cuda_ops.layernorm_with_cache(h_d, gamma_d, beta_d)
 
+    def _resid_scale(self) -> float:
+        return float(getattr(self.config, "residual_scale", 1.0) or 1.0)
+
+    def _scale_branch_grad(self, d_stream):
+        """d(branch) = residual_scale * d(stream) for x + s*branch."""
+        scale = self._resid_scale()
+        if abs(scale - 1.0) < 1e-12:
+            return d_stream
+        if hasattr(d_stream, "mx") or type(d_stream).__name__ == "DeviceArray":
+            return cuda_ops.scale_const(d_stream, scale)
+        return d_stream * scale
+
     def _residual_norm_with_cache_gpu(self, h_d, residual_d, gamma_d, beta_d=None):
+        scale = self._resid_scale()
         if self._use_rmsnorm:
-            return cuda_ops.residual_rmsnorm_with_cache(h_d, residual_d, gamma_d)
-        return cuda_ops.residual_layernorm_with_cache(h_d, residual_d, gamma_d, beta_d)
+            return cuda_ops.residual_rmsnorm_with_cache(h_d, residual_d, gamma_d, scale=scale)
+        return cuda_ops.residual_layernorm_with_cache(
+            h_d, residual_d, gamma_d, beta_d, scale=scale,
+        )
 
     def _norm_backward_gpu(self, dout, xhat, inv, gamma_d):
         if self._use_rmsnorm:
@@ -357,7 +372,7 @@ class GPTModel:
                 ln1_out_d, ln1_out, prefix, B, T, H, hd, scale, tracer=tracer,
             )
             layer_cache["attn"] = attn_cache
-            h_d = layers.add_residual(h_d, attn_out_d)
+            h_d = layers.add_residual(h_d, attn_out_d, scale=self._resid_scale())
 
             ln2_in = cuda_ops.to_host(h_d)
             beta2 = None if self._use_rmsnorm else b[f"{prefix}.ln2_beta"]
@@ -372,7 +387,7 @@ class GPTModel:
                 ln2_out_d = layers.layernorm(h_d, dw[f"{prefix}.ln2_gamma"], db[f"{prefix}.ln2_beta"])
             mlp_out_d, mlp_cache = self._mlp_forward_batch(ln2_out_d, ln2_out, prefix, tracer=tracer)
             layer_cache["mlp"] = mlp_cache
-            h_d = layers.add_residual(h_d, mlp_out_d)
+            h_d = layers.add_residual(h_d, mlp_out_d, scale=self._resid_scale())
 
             if tracer is not None and tracer.trace_neurons and tracer.active_step:
                 tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
@@ -545,7 +560,7 @@ class GPTModel:
             prefix = f"layer_{layer}"
             layer_cache = cache["layers"][layer]
 
-            d_mlp_out = d_h
+            d_mlp_out = self._scale_branch_grad(d_h)
             d_resid1 = d_h
 
             d_ln2_out, mlp_grads = self._mlp_backward_gpu(d_mlp_out, layer_cache["mlp"], prefix, dw)
@@ -561,7 +576,7 @@ class GPTModel:
 
             d_h = cuda_ops.add_into(d_resid1, d_h_from_ln2)
 
-            d_attn_out = d_h
+            d_attn_out = self._scale_branch_grad(d_h)
             d_resid0 = d_h
 
             d_ln1_out, attn_grads = self._attention_backward_batch_gpu(
@@ -712,7 +727,7 @@ class GPTModel:
             prefix = f"layer_{layer}"
             layer_cache = cache["layers"][layer]
 
-            d_mlp_out = d_h
+            d_mlp_out = self._scale_branch_grad(d_h)
             d_resid1 = d_h
 
             d_ln2_out, d_mlp_grads = self._mlp_backward(d_mlp_out, layer_cache["mlp"], prefix, w)
@@ -727,7 +742,7 @@ class GPTModel:
 
             d_h = d_resid1 + d_h_from_ln2
 
-            d_attn_out = d_h
+            d_attn_out = self._scale_branch_grad(d_h)
             d_resid0 = d_h
 
             d_ln1_out, d_attn_grads = self._attention_backward_batch(
@@ -834,7 +849,7 @@ class GPTModel:
             prefix = f"layer_{layer}"
             layer_cache = cache["layers"][layer]
 
-            d_mlp_out = d_h
+            d_mlp_out = self._scale_branch_grad(d_h)
             d_resid1 = d_h
 
             d_ln2_out, d_mlp_grads = self._mlp_backward(d_mlp_out, layer_cache["mlp"], prefix, w)
@@ -849,7 +864,7 @@ class GPTModel:
 
             d_h = d_resid1 + d_h_from_ln2
 
-            d_attn_out = d_h
+            d_attn_out = self._scale_branch_grad(d_h)
             d_resid0 = d_h
 
             d_ln1_out, d_attn_grads = self._attention_backward(d_attn_out, layer_cache["attn"], prefix, w)

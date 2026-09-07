@@ -4,7 +4,24 @@ model/config.py
 Typed view over the `model` section of training_config.json.
 """
 
+import math
 from typing import Any, Dict
+
+
+def parse_residual_scale(raw, num_layers: int) -> float:
+    """GPT-2 residual branch scale. Missing/false = 1.0 (legacy checkpoints)."""
+    if raw is True:
+        return 1.0 / math.sqrt(2.0 * max(1, int(num_layers)))
+    if isinstance(raw, str):
+        key = raw.strip().lower()
+        if key in ("true", "gpt2", "1/sqrt(2l)", "1/sqrt(2*l)"):
+            return 1.0 / math.sqrt(2.0 * max(1, int(num_layers)))
+        if key in ("", "false", "off", "none"):
+            return 1.0
+        return float(key)
+    if raw is False or raw is None:
+        return 1.0
+    return float(raw)
 
 
 class GPTConfig:
@@ -32,6 +49,10 @@ class GPTConfig:
         self.pos_encoding: str = pos
         self.rope_base: float = float(model_dict.get("rope_base", 10000.0))
         self.gradient_checkpointing: bool = bool(model_dict.get("gradient_checkpointing", False))
+        # Default 1.0 so run8+16 / older checkpoints stay bit-identical.
+        self.residual_scale: float = parse_residual_scale(
+            model_dict.get("residual_scale", False), self.num_layers,
+        )
 
         assert self.embedding_dim % self.num_heads == 0, (
             f"embedding_dim ({self.embedding_dim}) must be divisible by "
@@ -61,6 +82,7 @@ class GPTConfig:
             "pos_encoding": self.pos_encoding,
             "rope_base": self.rope_base,
             "gradient_checkpointing": self.gradient_checkpointing,
+            "residual_scale": self.residual_scale,
         }
 
     def __repr__(self) -> str:
@@ -70,5 +92,6 @@ class GPTConfig:
             f"num_heads={self.num_heads}, head_dim={self.head_dim}, "
             f"num_layers={self.num_layers}, tie_embeddings={self.tie_embeddings}, "
             f"norm_type={self.norm_type!r}, pos_encoding={self.pos_encoding!r}, "
-            f"gradient_checkpointing={self.gradient_checkpointing})"
+            f"gradient_checkpointing={self.gradient_checkpointing}, "
+            f"residual_scale={self.residual_scale:.6g})"
         )
