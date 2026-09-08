@@ -540,6 +540,8 @@ def train(args: argparse.Namespace) -> str:
             autoscale=not getattr(args, "no_autoscale", False),
             headroom=float(getattr(args, "memory_headroom", None) or 0.15),
             allow_checkpoint=not getattr(args, "no_grad_checkpoint", False),
+            allow_stream=not getattr(args, "no_layer_stream", False),
+            force_stream=bool(getattr(args, "layer_stream", False)),
         )
         params = ModelParameters(gpt_config, init_scales=config.get("weight_initialization", {}), seed=args.seed)
     else:
@@ -563,6 +565,8 @@ def train(args: argparse.Namespace) -> str:
             autoscale=not getattr(args, "no_autoscale", False),
             headroom=float(getattr(args, "memory_headroom", None) or 0.15),
             allow_checkpoint=not getattr(args, "no_grad_checkpoint", False),
+            allow_stream=not getattr(args, "no_layer_stream", False),
+            force_stream=bool(getattr(args, "layer_stream", False)),
         )
 
     # 90/10 val holdout (stable across resume when val_corpus.json is present).

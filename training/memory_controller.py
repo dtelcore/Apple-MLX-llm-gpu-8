@@ -9,16 +9,17 @@ Knobs, cheapest quality impact first:
   1. Realize the MLX graph after each layer (drop lazy intermediates)
   2. Gradient checkpointing (recompute attn/MLP in backward)
   3. FP16 storage for kept activations (compute stays FP32)
-  4. Smaller micro-batch, more grad-accum (same tokens/step)
-  5. Shorter context T (last resort)
+  4. Sequential layer streaming (one block + Adam on Metal; idle m/v on host)
+  5. Smaller micro-batch, more grad-accum (same tokens/step)
+  6. Shorter context T (last resort)
 
-If parameter tensors alone exceed the usable budget, refuse: layer-weight
-offload / pipeline-parallel weight swap is not implemented.
+If always-resident weights + one block still overflow the usable Metal budget,
+refuse. ``--no-layer-stream`` keeps the pre-stream refuse. ``--layer-stream``
+forces streaming (L=6 bring-up). Residual checkpoints ``h_in`` stay on device.
 
-Layer-parallel prep: ``eval_per_layer`` isolates each block's MLX graph (the
-residual stream is realized before the next layer). A later pipeline can hook
-that boundary to page idle ``device_weights[layer_i]`` without retaining all L
-activation caches. This module does not spawn workers or shard layers.
+Layer streaming: ``layer_strategy='stream'`` pages idle ``device_weights[layer_i]``
+and Adam m/v so peak Metal is O(1) in depth. Generate prefill/decode uses the
+same load/unload. This module does not spawn workers or shard layers.
 
 """
 
@@ -90,6 +91,7 @@ class MemoryPlan:
     requested_max_len: int
     requested_accum: int
     requested_checkpoint: bool
+    layer_strategy: str = "resident"
     actions: List[str] = field(default_factory=list)
     breakdown_mb: Dict[str, float] = field(default_factory=dict)
     max_new_tokens: Optional[int] = None
@@ -108,7 +110,8 @@ class MemoryPlan:
             f"estimate={self.estimated_bytes / (1024 ** 2):.0f}MB "
             f"B={self.batch_size} accum={self.grad_accum} T={self.max_len} "
             f"ckpt={int(self.gradient_checkpointing)} fp16={int(self.fp16_activations)} "
-            f"eval_per_layer={int(self.eval_per_layer)} | {changed}"
+            f"eval_per_layer={int(self.eval_per_layer)} "
+            f"layers={self.layer_strategy} | {changed}"
         )
 
 
@@ -125,6 +128,7 @@ def estimate_train_bytes(
     fp16_activations: bool = False,
     eval_per_layer: bool = False,
     grad_accum: int = 1,
+    layer_strategy: str = "resident",
 ) -> TrainEstimate:
     """Conservative float32 bytes for one optimizer step on the live MLX path."""
     B = max(1, int(batch_size))
@@ -135,11 +139,12 @@ def estimate_train_bytes(
     V = max(1, int(vocab_size))
     accum = max(1, int(grad_accum))
     n_params = max(0, int(n_params))
+    stream = str(layer_strategy).strip().lower() == "stream"
 
     param_b = n_params * _F32
     param_host = param_b
     param_device = param_b
-    optimizer = 2 * param_b  # Adam m, v on device
+    optimizer = 2 * param_b  # Adam m, v
     grads = param_b
     if accum > 1:
         grads += param_b  # accumulation buffer
@@ -154,20 +159,37 @@ def estimate_train_bytes(
     stored_per_layer = ln_stored + kv_stored
     working = attn + qkv + 2 * mlp
 
-    if gradient_checkpointing:
+    if stream:
+        # Host holds all weights + idle Adam; Metal sees embed + one block.
+        resident_n = min(n_params, V * C + 2 * C + V)
+        block_n = max(1, (n_params - resident_n) // L)
+        param_device = (resident_n + block_n) * _F32
+        optimizer = 2 * param_b  # idle layer m/v stay on host
+        grads = param_device
+        if accum > 1:
+            grads += param_b  # host accum of the full grad dict
+        # All residual checkpoints on device + one live attn/MLP working set.
+        stored = L * btc + stored_per_layer
+        live_working = working
+        activations = int(_ACT_SAFETY * (stored + live_working))
+    elif gradient_checkpointing:
         stored = L * stored_per_layer
         live_working = working if eval_per_layer else L * working
+        activations = int(_ACT_SAFETY * (stored + live_working))
+        if fp16_activations:
+            activations = int(activations * 0.72)
     elif eval_per_layer:
         stored = L * (stored_per_layer + working)
         live_working = working
+        activations = int(_ACT_SAFETY * (stored + live_working))
+        if fp16_activations:
+            activations = int(activations * 0.72)
     else:
         stored = L * (stored_per_layer + working)
         live_working = L * working
-
-    activations = int(_ACT_SAFETY * (stored + live_working))
-    if fp16_activations:
-        # Kept caches in FP16; working compute stays FP32.
-        activations = int(activations * 0.72)
+        activations = int(_ACT_SAFETY * (stored + live_working))
+        if fp16_activations:
+            activations = int(activations * 0.72)
 
     logits = B * T * V * _F32
     workspace = int(1.35 * max(attn, mlp, btc) * 3)
@@ -199,6 +221,7 @@ def estimate_generate_bytes(
     max_new_tokens: int = 80,
     use_kv_cache: bool = True,
     eval_per_layer: bool = True,
+    layer_strategy: str = "resident",
 ) -> int:
     """Prefill + KV arenas + one decode step. No Adam."""
     T = max(1, min(int(max_len), int(prompt_len) + max(1, int(max_new_tokens))))
@@ -214,6 +237,7 @@ def estimate_generate_bytes(
         fp16_activations=False,
         eval_per_layer=eval_per_layer,
         grad_accum=1,
+        layer_strategy=layer_strategy,
     )
     # Generate does not keep Adam / grad / host-train accum.
     without_train = (
@@ -248,6 +272,8 @@ def plan_train(
     headroom: float = _DEFAULT_HEADROOM,
     allow_checkpoint: bool = True,
     allow_fp16: bool = True,
+    layer_strategy: str = "resident",
+    allow_stream: bool = True,
 ) -> MemoryPlan:
     """Return a plan that fits the 2 GB cap, or ``fits=False`` if impossible."""
     usable = usable_bytes(headroom)
@@ -262,9 +288,15 @@ def plan_train(
     accum = requested_accum
     ckpt = requested_ckpt
     fp16 = False
-    eval_pl = False
+    stream = str(layer_strategy).strip().lower() == "stream"
+    if not allow_stream:
+        stream = False
+    eval_pl = bool(stream)
     actions: List[str] = []
     effective = B * accum
+
+    def _strategy() -> str:
+        return "stream" if stream else "resident"
 
     def _est() -> TrainEstimate:
         return estimate_train_bytes(
@@ -279,6 +311,7 @@ def plan_train(
             fp16_activations=fp16,
             eval_per_layer=eval_pl,
             grad_accum=accum,
+            layer_strategy=_strategy(),
         )
 
     est = _est()
@@ -298,6 +331,7 @@ def plan_train(
             requested_max_len=requested_t,
             requested_accum=requested_accum,
             requested_checkpoint=requested_ckpt,
+            layer_strategy=_strategy(),
             actions=actions if autoscale else (["autoscale disabled"] if not _plan_fits(est, usable) else []),
             breakdown_mb=est.as_mb(),
             fits=_plan_fits(est, usable),
@@ -311,6 +345,7 @@ def plan_train(
         return _finish_plan(
             B, T, accum, ckpt, fp16, eval_pl, est, usable, budget,
             requested_batch, requested_t, requested_accum, requested_ckpt, actions,
+            layer_strategy=_strategy(),
         )
 
     # 2. Checkpoint attn/MLP activations.
@@ -322,6 +357,7 @@ def plan_train(
             return _finish_plan(
                 B, T, accum, ckpt, fp16, eval_pl, est, usable, budget,
                 requested_batch, requested_t, requested_accum, requested_ckpt, actions,
+                layer_strategy=_strategy(),
             )
 
     # 3. FP16 kept caches.
@@ -333,6 +369,7 @@ def plan_train(
             return _finish_plan(
                 B, T, accum, ckpt, fp16, eval_pl, est, usable, budget,
                 requested_batch, requested_t, requested_accum, requested_ckpt, actions,
+                layer_strategy=_strategy(),
             )
 
     # 4. Halve micro-batch; raise accum to keep tokens/optimizer-step.
@@ -345,9 +382,26 @@ def plan_train(
             return _finish_plan(
                 B, T, accum, ckpt, fp16, eval_pl, est, usable, budget,
                 requested_batch, requested_t, requested_accum, requested_ckpt, actions,
+                layer_strategy=_strategy(),
             )
 
-    # 5. Shrink context. Effective batch already at B=1.
+    # 5. Sequential layer streaming before shrinking context.
+    # Enable even if this B/T is still over so later T shrinks use the stream estimate.
+    if allow_stream and not stream:
+        stream = True
+        eval_pl = True
+        actions.append("layer_strategy=stream")
+        if "eval_per_layer" not in actions:
+            actions.append("eval_per_layer")
+        est = _est()
+        if _plan_fits(est, usable):
+            return _finish_plan(
+                B, T, accum, ckpt, fp16, eval_pl, est, usable, budget,
+                requested_batch, requested_t, requested_accum, requested_ckpt, actions,
+                layer_strategy=_strategy(),
+            )
+
+    # 6. Shrink context. Effective batch already at B=1.
     while T > _MIN_CONTEXT:
         nxt = _align_context(T // 2)
         if nxt >= T:
@@ -361,6 +415,7 @@ def plan_train(
             return _finish_plan(
                 B, T, accum, ckpt, fp16, eval_pl, est, usable, budget,
                 requested_batch, requested_t, requested_accum, requested_ckpt, actions,
+                layer_strategy=_strategy(),
             )
 
     est = _est()
@@ -379,6 +434,7 @@ def plan_train(
         requested_max_len=requested_t,
         requested_accum=requested_accum,
         requested_checkpoint=requested_ckpt,
+        layer_strategy=_strategy(),
         actions=actions,
         breakdown_mb=est.as_mb(),
         fits=_plan_fits(est, usable),
@@ -388,6 +444,7 @@ def plan_train(
 def _finish_plan(
     B, T, accum, ckpt, fp16, eval_pl, est, usable, budget,
     requested_batch, requested_t, requested_accum, requested_ckpt, actions,
+    layer_strategy: str = "resident",
 ) -> MemoryPlan:
     return MemoryPlan(
         mode="train",
@@ -404,6 +461,7 @@ def _finish_plan(
         requested_max_len=requested_t,
         requested_accum=requested_accum,
         requested_checkpoint=requested_ckpt,
+        layer_strategy=layer_strategy,
         actions=actions,
         breakdown_mb=est.as_mb(),
         fits=True,
@@ -422,6 +480,7 @@ def plan_generate(
     max_new_tokens: int,
     use_kv_cache: bool = True,
     headroom: float = _DEFAULT_HEADROOM,
+    layer_strategy: str = "resident",
 ) -> MemoryPlan:
     usable = usable_bytes(headroom)
     budget = process_budget_bytes()
@@ -448,6 +507,7 @@ def plan_generate(
             max_new_tokens=nt,
             use_kv_cache=use_kv_cache,
             eval_per_layer=eval_pl,
+            layer_strategy=layer_strategy,
         )
 
     est_b = _bytes(new_toks)
@@ -471,6 +531,7 @@ def plan_generate(
         requested_max_len=T,
         requested_accum=1,
         requested_checkpoint=True,
+        layer_strategy=str(layer_strategy),
         actions=actions,
         breakdown_mb={"total": round(est_b / (1024 ** 2), 1)},
         max_new_tokens=new_toks,
@@ -489,8 +550,15 @@ def apply_train_plan(
     headroom: float = _DEFAULT_HEADROOM,
     allow_checkpoint: bool = True,
     allow_fp16: bool = True,
+    allow_stream: bool = True,
+    force_stream: bool = False,
 ) -> MemoryPlan:
     """Mutate config/hyperparams to the plan. Raises if the 2 GB cap cannot be met."""
+    strategy = str(getattr(gpt_config, "layer_strategy", "resident"))
+    if force_stream:
+        strategy = "stream"
+    if not allow_stream:
+        strategy = "resident"
     plan = plan_train(
         n_params=int(n_params),
         batch_size=int(hyperparams.get("batch_size", 1)),
@@ -505,6 +573,8 @@ def apply_train_plan(
         headroom=headroom,
         allow_checkpoint=allow_checkpoint,
         allow_fp16=allow_fp16,
+        layer_strategy=strategy,
+        allow_stream=allow_stream,
     )
     if not plan.fits:
         raise MemoryBudgetError(
@@ -514,16 +584,17 @@ def apply_train_plan(
             f"estimate={plan.estimated_bytes / (1024 ** 2):.0f} MB "
             f"usable={plan.usable_bytes / (1024 ** 2):.0f} MB "
             f"after autoscale B={plan.batch_size} T={plan.max_len} "
-            f"ckpt={plan.gradient_checkpointing}. "
-            f"Weights+Adam already fill the cap; layer-weight streaming is not implemented."
+            f"ckpt={plan.gradient_checkpointing} layers={plan.layer_strategy}."
         )
 
     gpt_config.max_len = int(plan.max_len)
     gpt_config.gradient_checkpointing = bool(plan.gradient_checkpointing)
     gpt_config.eval_per_layer = bool(plan.eval_per_layer)
+    gpt_config.layer_strategy = str(plan.layer_strategy)
     if model_dict is not None:
         model_dict["max_len"] = int(plan.max_len)
         model_dict["gradient_checkpointing"] = bool(plan.gradient_checkpointing)
+        model_dict["layer_strategy"] = str(plan.layer_strategy)
     if not isinstance(hyperparams, dict):
         raise TypeError("hyperparams must be a mutable dict")
     hyperparams["batch_size"] = int(plan.batch_size)
@@ -555,6 +626,7 @@ def apply_generate_plan(
     headroom: float = _DEFAULT_HEADROOM,
 ) -> MemoryPlan:
     gpt_config.eval_per_layer = True
+    strategy = str(getattr(gpt_config, "layer_strategy", "resident"))
     plan = plan_generate(
         n_params=int(n_params),
         max_len=int(gpt_config.max_len),
@@ -566,6 +638,7 @@ def apply_generate_plan(
         max_new_tokens=int(max_new_tokens),
         use_kv_cache=use_kv_cache,
         headroom=headroom,
+        layer_strategy=strategy,
     )
     if not plan.fits:
         raise MemoryBudgetError(

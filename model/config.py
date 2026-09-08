@@ -53,6 +53,10 @@ class GPTConfig:
         self.residual_scale: float = parse_residual_scale(
             model_dict.get("residual_scale", False), self.num_layers,
         )
+        strategy = str(model_dict.get("layer_strategy", "resident")).strip().lower()
+        if strategy not in ("resident", "stream"):
+            raise ValueError(f"layer_strategy must be 'resident' or 'stream', got {strategy!r}")
+        self.layer_strategy: str = strategy
 
         assert self.embedding_dim % self.num_heads == 0, (
             f"embedding_dim ({self.embedding_dim}) must be divisible by "
@@ -83,6 +87,7 @@ class GPTConfig:
             "rope_base": self.rope_base,
             "gradient_checkpointing": self.gradient_checkpointing,
             "residual_scale": self.residual_scale,
+            "layer_strategy": self.layer_strategy,
         }
 
     def __repr__(self) -> str:
@@ -93,5 +98,6 @@ class GPTConfig:
             f"num_layers={self.num_layers}, tie_embeddings={self.tie_embeddings}, "
             f"norm_type={self.norm_type!r}, pos_encoding={self.pos_encoding!r}, "
             f"gradient_checkpointing={self.gradient_checkpointing}, "
-            f"residual_scale={self.residual_scale:.6g})"
+            f"residual_scale={self.residual_scale:.6g}, "
+            f"layer_strategy={self.layer_strategy!r})"
         )

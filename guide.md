@@ -1,7 +1,7 @@
 # Apple MLX / Kepler guide
 
 **This tree is the Apple MLX port (MacBook Air M3, 8 GB unified, 2 GB process cap).**
-Current release: **v0.0.4** — memory controller + sequential-layer seam. Start with
+Current release: **v0.0.5** — sequential layer streaming under the 2 GB Metal cap. Start with
 [`README.md`](README.md). Kepler GT 730 notes below are leftover host-CLI docs.
 
 ---

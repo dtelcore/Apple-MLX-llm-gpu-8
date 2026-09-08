@@ -190,6 +190,15 @@ def add_model_hyperparam_args(parser: argparse.ArgumentParser) -> None:
         "--memory-headroom", type=float, default=None,
         help="Fraction of the 2 GB process cap left for compile/scratch (default 0.15). Does not raise the 2 GB cap.",
     )
+    stream_group = group.add_mutually_exclusive_group()
+    stream_group.add_argument(
+        "--layer-stream", action="store_true", default=False,
+        help="Force sequential layer streaming (one transformer block on Metal). For L=6 bring-up or deep stacks.",
+    )
+    stream_group.add_argument(
+        "--no-layer-stream", action="store_true", default=False,
+        help="Disable layer streaming; autoscale may shrink T instead, or refuse if the 2 GB estimate overflows",
+    )
 
 
 def prompt_model_hyperparams(args: argparse.Namespace, model_config: Dict, hyperparams: Dict) -> None:
@@ -244,6 +253,11 @@ def prompt_model_hyperparams(args: argparse.Namespace, model_config: Dict, hyper
         model_config["gradient_checkpointing"] = True
     elif "gradient_checkpointing" not in model_config:
         model_config["gradient_checkpointing"] = False
+
+    if getattr(args, "layer_stream", False):
+        model_config["layer_strategy"] = "stream"
+    elif getattr(args, "no_layer_stream", False):
+        model_config["layer_strategy"] = "resident"
 
     _ask("batch_size", "Batch size", hyperparams, "batch_size", int, hyperparams.get("batch_size", 2))
     _ask("weight_decay", "Weight decay", hyperparams, "weight_decay", float, hyperparams.get("weight_decay", 0.01))

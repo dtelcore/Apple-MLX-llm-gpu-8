@@ -1,6 +1,6 @@
 # py_calls.md — runnable entry points
 
-**Apple MLX (this tree, v0.0.4):** MacBook Air M3, 2 GB process cap. Start with
+**Apple MLX (this tree, v0.0.5):** MacBook Air M3, 2 GB process cap. Start with
 [`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
 
 Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
@@ -74,8 +74,10 @@ Shared flag groups live in [`cli_common.py`](cli_common.py) and are referenced b
 | `--no-grad-checkpoint` | flag | off (then controller shrinks B/T instead) |
 | `--no-autoscale` | flag | off (refuse if 2 GB estimate overflows) |
 | `--memory-headroom` | float | `0.15` (compile slack; does not raise the 2 GB cap) |
+| `--layer-stream` | flag | off (force one-block Metal streaming) |
+| `--no-layer-stream` | flag | off (never autoscale into stream; shrink T or refuse) |
 
-v0.0.4: `training/memory_controller.py` autoscales batch/context/activations to the hardcoded 2 GB process cap. Architecture is never changed. See [`README.md`](README.md).
+v0.0.5: `training/memory_controller.py` autoscales batch/context/activations and may enable sequential layer streaming **before** shrinking `T`. Architecture is never changed. See [`README.md`](README.md). Residual checkpoints stay on device; expect 2–4× tok/s vs resident L=6.
 
 ### Generate probes `(shared: probe)`
 

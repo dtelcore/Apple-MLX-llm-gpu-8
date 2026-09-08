@@ -186,6 +186,10 @@ class GPTModel:
     def _grad_checkpoint(self) -> bool:
         return bool(getattr(self.config, "gradient_checkpointing", False))
 
+    @property
+    def _streaming(self) -> bool:
+        return bool(self.params.streaming())
+
     def _norm_with_cache_gpu(self, h_d, gamma_d, beta_d=None):
         if self._use_rmsnorm:
             return cuda_ops.rmsnorm_with_cache(h_d, gamma_d)
@@ -205,7 +209,7 @@ class GPTModel:
 
     def _eval_stream(self, *arrays) -> None:
         """Realize the residual stream so unused MLX intermediates can free."""
-        if not getattr(self.config, "eval_per_layer", False):
+        if not getattr(self.config, "eval_per_layer", False) and not self._streaming:
             return
         live = [
             a for a in arrays
@@ -279,64 +283,42 @@ class GPTModel:
                     dw["token_embedding"], dw["position_embedding"], T,
                 )
             cache["layers"] = []
-            pending_ln1 = None
+            cache["h_in_d"] = []
+            stream = self._streaming
+            kv_arenas = None
+            if stream and getattr(self, "_stream_pack_kv", False):
+                from model.mlx.kv_cache import alloc_layer_arena
+                kv_arenas = [
+                    alloc_layer_arena(B * H, cfg.max_len, hd) for _ in range(cfg.num_layers)
+                ]
 
             for layer in range(cfg.num_layers):
-                prefix = f"layer_{layer}"
-                layer_cache: Dict = {"B": B, "T": T, "gpu": True}
-
-                if pending_ln1 is None:
-                    beta1 = None if self._use_rmsnorm else db[f"{prefix}.ln1_beta"]
-                    ln1_out_d, ln1_xhat_d, ln1_invstd_d = self._norm_with_cache_gpu(
-                        h_d, dw[f"{prefix}.ln1_gamma"], beta1,
-                    )
-                else:
-                    ln1_out_d, ln1_xhat_d, ln1_invstd_d = pending_ln1
-                    pending_ln1 = None
-                layer_cache["ln1_out_d"] = ln1_out_d
-                layer_cache["ln1_xhat_d"] = ln1_xhat_d
-                layer_cache["ln1_invstd_d"] = ln1_invstd_d
-
-                attn_out_d, attn_cache = self._attention_forward_batch(
-                    ln1_out_d, None, prefix, B, T, H, hd, scale, tracer=tracer,
+                if stream:
+                    self.params.load_layer(layer)
+                cache["h_in_d"].append(h_d)
+                if stream:
+                    cuda_ops.eval_for_host(h_d)
+                keep = not stream
+                arena = kv_arenas[layer] if kv_arenas is not None else None
+                h_d, layer_cache = self._block_forward_gpu(
+                    layer, h_d, B, T, H, hd, scale, tracer=tracer,
+                    keep_cache=keep, kv_arena=arena,
                 )
-                layer_cache["attn"] = attn_cache
-
-                beta2 = None if self._use_rmsnorm else db[f"{prefix}.ln2_beta"]
-                h_d, ln2_out_d, ln2_xhat_d, ln2_invstd_d = self._residual_norm_with_cache_gpu(
-                    h_d, attn_out_d, dw[f"{prefix}.ln2_gamma"], beta2,
-                )
-                layer_cache["ln2_out_d"] = ln2_out_d
-                layer_cache["ln2_xhat_d"] = ln2_xhat_d
-                layer_cache["ln2_invstd_d"] = ln2_invstd_d
-
-                mlp_out_d, mlp_cache = self._mlp_forward_batch(
-                    ln2_out_d, None, prefix, tracer=tracer,
-                )
-                layer_cache["mlp"] = mlp_cache
-
-                if layer + 1 < cfg.num_layers:
-                    next_prefix = f"layer_{layer + 1}"
-                    nbeta = None if self._use_rmsnorm else db[f"{next_prefix}.ln1_beta"]
-                    h_d, ln1_n, xhat_n, inv_n = self._residual_norm_with_cache_gpu(
-                        h_d, mlp_out_d, dw[f"{next_prefix}.ln1_gamma"], nbeta,
-                    )
-                    pending_ln1 = (ln1_n, xhat_n, inv_n)
-                else:
-                    fbeta = None if self._use_rmsnorm else db["final_ln_beta"]
-                    h_d, h_final_d, final_xhat_d, final_invstd_d = self._residual_norm_with_cache_gpu(
-                        h_d, mlp_out_d, dw["final_ln_gamma"], fbeta,
-                    )
-
-                if tracer is not None and tracer.trace_neurons and tracer.active_step:
-                    tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
-
+                cuda_ops.eval_for_host(h_d)
                 cache["layers"].append(layer_cache)
-                self._eval_stream(h_d)
+                if stream:
+                    self.params.unload_layer(layer)
 
+            fbeta = None if self._use_rmsnorm else db.get("final_ln_beta")
+            h_final_d, final_xhat_d, final_invstd_d = self._norm_with_cache_gpu(
+                h_d, dw["final_ln_gamma"], fbeta,
+            )
             cache["h_final_d"] = h_final_d
             cache["final_xhat_d"] = final_xhat_d
             cache["final_invstd_d"] = final_invstd_d
+            cache["stream"] = stream
+            if kv_arenas is not None:
+                cache["kv_arenas"] = kv_arenas
 
             logits_d = layers.linear(
                 h_final_d, dw["lm_head"], db["lm_head_bias"], tracer=tracer, name="lm_head",
@@ -348,7 +330,7 @@ class GPTModel:
             else:
                 logits = np.empty((B, T, cfg.vocab_size), dtype=np.float32)
             from model.mlx.fp16_storage import compress_cache_fp16, fp16_storage_enabled
-            if fp16_storage_enabled() and not self._grad_checkpoint:
+            if fp16_storage_enabled() and not self._grad_checkpoint and not stream:
                 compress_cache_fp16(cache)
             return logits, cache
 
@@ -526,6 +508,98 @@ class GPTModel:
             }
         return mlp_out_d, mlp_cache
 
+    def _block_forward_gpu(
+        self, layer: int, h_d, B: int, T: int, H: int, hd: int, scale: float,
+        tracer: TraceContext = None, keep_cache: bool = True, kv_arena=None,
+    ):
+        """Self-contained pre-norm block: LN1, attn, resid+LN2, MLP, resid add."""
+        from model.mlx.kv_cache import pack_prefill_into_arena
+
+        prefix = f"layer_{layer}"
+        dw, db = self.params.device_weights, self.params.device_biases
+        layer_cache: Dict = {"B": B, "T": T, "gpu": True}
+
+        beta1 = None if self._use_rmsnorm else db.get(f"{prefix}.ln1_beta")
+        ln1_out_d, ln1_xhat_d, ln1_invstd_d = self._norm_with_cache_gpu(
+            h_d, dw[f"{prefix}.ln1_gamma"], beta1,
+        )
+        attn_out_d, attn_cache = self._attention_forward_batch(
+            ln1_out_d, None, prefix, B, T, H, hd, scale, tracer=tracer,
+        )
+        if kv_arena is not None and attn_cache.get("k_d") is not None:
+            pack_prefill_into_arena(
+                attn_cache["k_d"], attn_cache["v_d"], kv_arena,
+                batch_heads=B * H, seq_len=T,
+                max_len=int(self.config.max_len), head_dim=hd,
+            )
+
+        beta2 = None if self._use_rmsnorm else db.get(f"{prefix}.ln2_beta")
+        h_d, ln2_out_d, ln2_xhat_d, ln2_invstd_d = self._residual_norm_with_cache_gpu(
+            h_d, attn_out_d, dw[f"{prefix}.ln2_gamma"], beta2,
+        )
+        mlp_out_d, mlp_cache = self._mlp_forward_batch(
+            ln2_out_d, None, prefix, tracer=tracer,
+        )
+        h_d = layers.add_residual(h_d, mlp_out_d, scale=self._resid_scale())
+
+        if keep_cache:
+            layer_cache["ln1_out_d"] = ln1_out_d
+            layer_cache["ln1_xhat_d"] = ln1_xhat_d
+            layer_cache["ln1_invstd_d"] = ln1_invstd_d
+            layer_cache["attn"] = attn_cache
+            layer_cache["ln2_out_d"] = ln2_out_d
+            layer_cache["ln2_xhat_d"] = ln2_xhat_d
+            layer_cache["ln2_invstd_d"] = ln2_invstd_d
+            layer_cache["mlp"] = mlp_cache
+        if tracer is not None and tracer.trace_neurons and tracer.active_step:
+            tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
+        return h_d, layer_cache
+
+    def _block_backward_gpu(self, layer: int, d_h, layer_cache: Dict, dw: Dict) -> Tuple[object, Dict]:
+        prefix = f"layer_{layer}"
+        grads: Dict = {}
+
+        d_mlp_out = self._scale_branch_grad(d_h)
+        d_resid1 = d_h
+        d_ln2_out, mlp_grads = self._mlp_backward_gpu(d_mlp_out, layer_cache["mlp"], prefix, dw)
+        grads.update(mlp_grads)
+        d_h_from_ln2, d_ln2_gamma, d_ln2_beta = self._norm_backward_gpu(
+            d_ln2_out, layer_cache["ln2_xhat_d"], layer_cache["ln2_invstd_d"],
+            dw[f"{prefix}.ln2_gamma"],
+        )
+        grads[f"{prefix}.ln2_gamma"] = d_ln2_gamma
+        if d_ln2_beta is not None:
+            grads[f"{prefix}.ln2_beta"] = d_ln2_beta
+        d_h = cuda_ops.add_into(d_resid1, d_h_from_ln2)
+
+        d_attn_out = self._scale_branch_grad(d_h)
+        d_resid0 = d_h
+        d_ln1_out, attn_grads = self._attention_backward_batch_gpu(
+            d_attn_out, layer_cache["attn"], prefix, dw,
+        )
+        grads.update(attn_grads)
+        d_h_from_ln1, d_ln1_gamma, d_ln1_beta = self._norm_backward_gpu(
+            d_ln1_out, layer_cache["ln1_xhat_d"], layer_cache["ln1_invstd_d"],
+            dw[f"{prefix}.ln1_gamma"],
+        )
+        grads[f"{prefix}.ln1_gamma"] = d_ln1_gamma
+        if d_ln1_beta is not None:
+            grads[f"{prefix}.ln1_beta"] = d_ln1_beta
+        d_h = cuda_ops.add_into(d_resid0, d_h_from_ln1)
+        self._eval_stream(d_h)
+        return d_h, grads
+
+    def _grads_to_host(self, grads: Dict) -> Dict[str, np.ndarray]:
+        out: Dict[str, np.ndarray] = {}
+        for key, val in grads.items():
+            if val is None:
+                continue
+            if hasattr(val, "mx") or type(val).__name__ == "DeviceArray":
+                out[key] = np.ascontiguousarray(cuda_ops.to_host(val), dtype=np.float32)
+            else:
+                out[key] = np.ascontiguousarray(val, dtype=np.float32)
+        return out
+
     # ------------------------------------------------------------------
     # Backward (batched)
     # ------------------------------------------------------------------
@@ -569,44 +643,28 @@ class GPTModel:
         if d_final_beta is not None:
             grads["final_ln_beta"] = d_final_beta
 
+        stream = bool(cache.get("stream") or self._streaming)
+        H, hd = cfg.num_heads, cfg.head_dim
+        scale = 1.0 / np.sqrt(hd)
+        host_grads: Dict = {}
+
         for layer in reversed(range(cfg.num_layers)):
-            prefix = f"layer_{layer}"
-            layer_cache = cache["layers"][layer]
-
-            d_mlp_out = self._scale_branch_grad(d_h)
-            d_resid1 = d_h
-
-            d_ln2_out, mlp_grads = self._mlp_backward_gpu(d_mlp_out, layer_cache["mlp"], prefix, dw)
-            grads.update(mlp_grads)
-
-            d_h_from_ln2, d_ln2_gamma, d_ln2_beta = self._norm_backward_gpu(
-                d_ln2_out, layer_cache["ln2_xhat_d"], layer_cache["ln2_invstd_d"],
-                dw[f"{prefix}.ln2_gamma"],
-            )
-            grads[f"{prefix}.ln2_gamma"] = d_ln2_gamma
-            if d_ln2_beta is not None:
-                grads[f"{prefix}.ln2_beta"] = d_ln2_beta
-
-            d_h = cuda_ops.add_into(d_resid1, d_h_from_ln2)
-
-            d_attn_out = self._scale_branch_grad(d_h)
-            d_resid0 = d_h
-
-            d_ln1_out, attn_grads = self._attention_backward_batch_gpu(
-                d_attn_out, layer_cache["attn"], prefix, dw,
-            )
-            grads.update(attn_grads)
-
-            d_h_from_ln1, d_ln1_gamma, d_ln1_beta = self._norm_backward_gpu(
-                d_ln1_out, layer_cache["ln1_xhat_d"], layer_cache["ln1_invstd_d"],
-                dw[f"{prefix}.ln1_gamma"],
-            )
-            grads[f"{prefix}.ln1_gamma"] = d_ln1_gamma
-            if d_ln1_beta is not None:
-                grads[f"{prefix}.ln1_beta"] = d_ln1_beta
-
-            d_h = cuda_ops.add_into(d_resid0, d_h_from_ln1)
-            self._eval_stream(d_h)
+            if stream:
+                self.params.load_layer(layer)
+                dw = self.params.device_weights
+                h_in = cache["h_in_d"][layer]
+                _, layer_cache = self._block_forward_gpu(
+                    layer, h_in, B, T, H, hd, scale, keep_cache=True,
+                )
+            else:
+                layer_cache = cache["layers"][layer]
+            d_h, layer_grads = self._block_backward_gpu(layer, d_h, layer_cache, dw)
+            if stream:
+                host_grads.update(self._grads_to_host(layer_grads))
+                cuda_ops.eval_for_host(d_h)
+                self.params.unload_layer(layer)
+            else:
+                grads.update(layer_grads)
 
         d_tok, d_pos = cuda_ops.embed_backward(
             cache["ids"].astype(np.int32), d_h, cfg.vocab_size, C,
@@ -621,6 +679,9 @@ class GPTModel:
             grads["token_embedding"] = d_tok
         if d_pos is not None:
             grads["position_embedding"] = d_pos
+        if stream:
+            host_grads.update(self._grads_to_host(grads))
+            return host_grads
         return grads
 
     def _mlp_backward_gpu(self, d_mlp_out, mlp_cache: Dict, prefix: str, dw: Dict):
@@ -1010,6 +1071,8 @@ class GPTModel:
         ids = list(prompt_ids)
         prompt_len = len(ids)
         self._cuda_graph_status = None
+        if self._streaming:
+            use_cuda_graph = False
         if not use_kv_cache:
             return self._generate_no_kv(
                 ids, max_new_tokens, temperature, top_k, top_p, tracer, tokenizer, rng,
@@ -1099,6 +1162,18 @@ class GPTModel:
 
     def _extract_kv_state(self, cache: Dict) -> Dict:
         """Pull per-layer K/V into generate-only state (device arenas when GPU)."""
+        if cache.get("kv_arenas"):
+            B = int(cache["B"])
+            T = int(cache["T"])
+            return {
+                "layers": cache["kv_arenas"],
+                "T": T,
+                "B": B,
+                "device": True,
+                "max_len": int(self.config.max_len),
+                "num_heads": int(self.config.num_heads),
+                "head_dim": int(self.config.head_dim),
+            }
         if _GPU_TRAINING and _USE_GPU_ATTENTION and cache.get("gpu"):
             from model.mlx.kv_cache import build_device_kv_state
             return build_device_kv_state(
@@ -1124,7 +1199,13 @@ class GPTModel:
 
     def _prefill_kv(self, token_ids, tracer: TraceContext = None):
         """Full forward over ``token_ids``; return (logits [T,V], kv_state)."""
-        logits, cache = self.forward(np.asarray(token_ids, dtype=np.int64), tracer=tracer)
+        prev = getattr(self, "_stream_pack_kv", False)
+        if self._streaming:
+            self._stream_pack_kv = True
+        try:
+            logits, cache = self.forward(np.asarray(token_ids, dtype=np.int64), tracer=tracer)
+        finally:
+            self._stream_pack_kv = prev
         kv_state = self._extract_kv_state(cache)
         # Keep last-row logits on device for Stage 4 sampling when possible.
         if kv_state.get("device") and cache.get("gpu") and "logits_d" in cache:
@@ -1179,20 +1260,20 @@ class GPTModel:
             raise ValueError("KV decode position exceeds max_len; caller should re-prefill")
 
         h_d = self._decode_embed_device(int(token_id), pos)
-        pending_ln1 = None
         h_final_d = None
+        stream = self._streaming
         for layer in range(cfg.num_layers):
             prefix = f"layer_{layer}"
             arena = kv_state["layers"][layer]
+            if stream:
+                self.params.load_layer(layer)
+                dw = self.params.device_weights
+                db = self.params.device_biases
 
-            if pending_ln1 is None:
-                beta1 = None if self._use_rmsnorm else db[f"{prefix}.ln1_beta"]
-                ln1_out_d, _, _ = self._norm_with_cache_gpu(
-                    h_d, dw[f"{prefix}.ln1_gamma"], beta1,
-                )
-            else:
-                ln1_out_d = pending_ln1
-                pending_ln1 = None
+            beta1 = None if self._use_rmsnorm else db.get(f"{prefix}.ln1_beta")
+            ln1_out_d, _, _ = self._norm_with_cache_gpu(
+                h_d, dw[f"{prefix}.ln1_gamma"], beta1,
+            )
 
             q_i, k_i, v_i = cuda_ops.linear_qkv_split(
                 ln1_out_d, dw[f"{prefix}.qkv_proj"], db[f"{prefix}.qkv_bias"],
@@ -1237,29 +1318,22 @@ class GPTModel:
                 tracer=tracer, name=f"{prefix}.attn_out",
             )
 
-            beta2 = None if self._use_rmsnorm else db[f"{prefix}.ln2_beta"]
+            beta2 = None if self._use_rmsnorm else db.get(f"{prefix}.ln2_beta")
             h_d, ln2_out_d, _, _ = self._residual_norm_with_cache_gpu(
                 h_d, attn_out_d, dw[f"{prefix}.ln2_gamma"], beta2,
             )
             mlp_out_d, _ = self._mlp_forward_batch(ln2_out_d, None, prefix, tracer=tracer)
-
-            if layer + 1 < cfg.num_layers:
-                next_prefix = f"layer_{layer + 1}"
-                nbeta = None if self._use_rmsnorm else db[f"{next_prefix}.ln1_beta"]
-                h_d, ln1_n, _, _ = self._residual_norm_with_cache_gpu(
-                    h_d, mlp_out_d, dw[f"{next_prefix}.ln1_gamma"], nbeta,
-                )
-                pending_ln1 = ln1_n
-            else:
-                fbeta = None if self._use_rmsnorm else db["final_ln_beta"]
-                h_d, h_final_d, _, _ = self._residual_norm_with_cache_gpu(
-                    h_d, mlp_out_d, dw["final_ln_gamma"], fbeta,
-                )
+            h_d = layers.add_residual(h_d, mlp_out_d, scale=self._resid_scale())
 
             if tracer is not None and tracer.trace_neurons and tracer.active_step:
                 tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
 
             self._eval_stream(h_d)
+            if stream:
+                self.params.unload_layer(layer)
+
+        fbeta = None if self._use_rmsnorm else db.get("final_ln_beta")
+        h_final_d, _, _ = self._norm_with_cache_gpu(h_d, dw["final_ln_gamma"], fbeta)
 
         logits_d = layers.linear(
             h_final_d, dw["lm_head"], db["lm_head_bias"], tracer=tracer, name="lm_head",
@@ -1297,20 +1371,20 @@ class GPTModel:
         h_d = cuda_ops.to_device(h)
 
         new_layers = []
-        pending_ln1 = None
         h_final_d = None
+        stream = self._streaming
         for layer in range(cfg.num_layers):
             prefix = f"layer_{layer}"
             past = kv_state["layers"][layer]
+            if stream:
+                self.params.load_layer(layer)
+                dw = self.params.device_weights
+                db = self.params.device_biases
 
-            if pending_ln1 is None:
-                beta1 = None if self._use_rmsnorm else db[f"{prefix}.ln1_beta"]
-                ln1_out_d, _, _ = self._norm_with_cache_gpu(
-                    h_d, dw[f"{prefix}.ln1_gamma"], beta1,
-                )
-            else:
-                ln1_out_d = pending_ln1
-                pending_ln1 = None
+            beta1 = None if self._use_rmsnorm else db.get(f"{prefix}.ln1_beta")
+            ln1_out_d, _, _ = self._norm_with_cache_gpu(
+                h_d, dw[f"{prefix}.ln1_gamma"], beta1,
+            )
 
             q_i, k_i, v_i = cuda_ops.linear_qkv_split(
                 ln1_out_d, dw[f"{prefix}.qkv_proj"], db[f"{prefix}.qkv_bias"],
@@ -1333,30 +1407,23 @@ class GPTModel:
                 tracer=tracer, name=f"{prefix}.attn_out",
             )
 
-            beta2 = None if self._use_rmsnorm else db[f"{prefix}.ln2_beta"]
+            beta2 = None if self._use_rmsnorm else db.get(f"{prefix}.ln2_beta")
             h_d, ln2_out_d, _, _ = self._residual_norm_with_cache_gpu(
                 h_d, attn_out_d, dw[f"{prefix}.ln2_gamma"], beta2,
             )
             mlp_out_d, _ = self._mlp_forward_batch(ln2_out_d, None, prefix, tracer=tracer)
-
-            if layer + 1 < cfg.num_layers:
-                next_prefix = f"layer_{layer + 1}"
-                nbeta = None if self._use_rmsnorm else db[f"{next_prefix}.ln1_beta"]
-                h_d, ln1_n, _, _ = self._residual_norm_with_cache_gpu(
-                    h_d, mlp_out_d, dw[f"{next_prefix}.ln1_gamma"], nbeta,
-                )
-                pending_ln1 = ln1_n
-            else:
-                fbeta = None if self._use_rmsnorm else db["final_ln_beta"]
-                h_d, h_final_d, _, _ = self._residual_norm_with_cache_gpu(
-                    h_d, mlp_out_d, dw["final_ln_gamma"], fbeta,
-                )
+            h_d = layers.add_residual(h_d, mlp_out_d, scale=self._resid_scale())
 
             if tracer is not None and tracer.trace_neurons and tracer.active_step:
                 tracer.dump_neurons(f"{prefix}.resid2_out", cuda_ops.to_host(h_d))
 
             self._eval_stream(h_d)
+            if stream:
+                self.params.unload_layer(layer)
             new_layers.append({"k": k_all, "v": v_all})
+
+        fbeta = None if self._use_rmsnorm else db.get("final_ln_beta")
+        h_final_d, _, _ = self._norm_with_cache_gpu(h_d, dw["final_ln_gamma"], fbeta)
 
         logits_d = layers.linear(
             h_final_d, dw["lm_head"], db["lm_head_bias"], tracer=tracer, name="lm_head",
@@ -1379,6 +1446,8 @@ class GPTModel:
 
     def _try_setup_decode_graph(self, kv_state: Dict, ids: List[int]):
         """Warm + capture Stage 4 decode kernel chain for replay (Stage 4.5)."""
+        if self._streaming:
+            return None
         from model.mlx.graph import try_capture_decode_replayable
         from model.mlx.kv_cache import clone_device_kv_state
 

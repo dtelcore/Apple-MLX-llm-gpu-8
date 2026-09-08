@@ -33,6 +33,7 @@ class ModelParameters:
         self.biases: Dict[str, np.ndarray] = {}
         self.device_weights: Dict[str, object] = {}
         self.device_biases: Dict[str, object] = {}
+        self._loaded_layer: Optional[int] = None
         self._rng = np.random.default_rng(seed)
         self.allocate_and_init()
         self.upload_to_device()
@@ -190,12 +191,89 @@ class ModelParameters:
         self.device_weights["lm_head"] = self.device_weights["token_embedding"].T
         self.weights["lm_head"] = self.weights["token_embedding"].T
 
-    def upload_to_device(self) -> None:
-        """Upload every weight/bias tensor to the GPU once. Called at construction
-        and after load(); training calls sync_device() after each optimizer step
-        instead of re-running this from scratch."""
+    def streaming(self) -> bool:
+        return str(getattr(self.config, "layer_strategy", "resident")) == "stream"
+
+    def always_resident_keys(self) -> Tuple[str, ...]:
+        keys = ["token_embedding", "final_ln_gamma", "lm_head_bias"]
+        if "position_embedding" in self.weights:
+            keys.append("position_embedding")
+        if "final_ln_beta" in self.biases:
+            keys.append("final_ln_beta")
+        if not self.tie_embeddings:
+            keys.append("lm_head")
+        return tuple(keys)
+
+    def layer_keys(self, layer: int) -> Tuple[str, ...]:
+        prefix = f"layer_{int(layer)}."
+        return tuple(n for n in self.trainable_param_names() if n.startswith(prefix))
+
+    def _upload_names(self, names: Iterable[str]) -> None:
         from model.mlx import ops
+        for name in names:
+            if self.tie_embeddings and name == "lm_head":
+                continue
+            if name in self.weights:
+                self.device_weights[name] = ops.to_device(np.ascontiguousarray(self.weights[name]))
+            elif name in self.biases:
+                self.device_biases[name] = ops.to_device(np.ascontiguousarray(self.biases[name]))
+        if any(n in ("token_embedding", "lm_head") for n in names):
+            self._bind_tied_lm_head_device()
+
+    def _drop_device_names(self, names: Iterable[str]) -> None:
+        for name in names:
+            if self.tie_embeddings and name == "lm_head":
+                continue
+            self.device_weights.pop(name, None)
+            self.device_biases.pop(name, None)
+
+    def load_layer(self, layer: int) -> None:
+        """Upload one transformer block onto Metal. No-op if already loaded."""
+        layer = int(layer)
+        keys = self.layer_keys(layer)
+        if self._loaded_layer == layer and keys and all(
+            (n in self.device_weights) or (n in self.device_biases) for n in keys
+        ):
+            return
+        if self._loaded_layer is not None and self._loaded_layer != layer:
+            self.unload_layer(self._loaded_layer)
+        self._upload_names(keys)
+        self._loaded_layer = layer
+
+    def unload_layer(self, layer: Optional[int] = None) -> None:
+        """Drop Metal copies of a block and clear ScratchPool named temps."""
+        from model.mlx import ops
+        if layer is None:
+            layer = self._loaded_layer
+        if layer is None:
+            ops.scratch_pool.clear()
+            return
+        self._drop_device_names(self.layer_keys(int(layer)))
+        if self._loaded_layer == int(layer):
+            self._loaded_layer = None
+        ops.scratch_pool.clear()
+        try:
+            import mlx.core as mx
+            if hasattr(mx, "synchronize"):
+                mx.synchronize()
+            if hasattr(mx, "clear_cache"):
+                mx.clear_cache()
+            else:
+                metal = getattr(mx, "metal", None)
+                if metal is not None and hasattr(metal, "clear_cache"):
+                    metal.clear_cache()
+        except Exception:
+            pass
+
+    def upload_to_device(self) -> None:
+        """Upload weight/bias tensors. Streaming: always-resident keys only."""
         self.device_weights = {}
+        self.device_biases = {}
+        self._loaded_layer = None
+        if self.streaming():
+            self._upload_names(self.always_resident_keys())
+            return
+        from model.mlx import ops
         for name, arr in self.weights.items():
             if self.tie_embeddings and name == "lm_head":
                 continue
@@ -204,12 +282,15 @@ class ModelParameters:
         self._bind_tied_lm_head_device()
 
     def sync_device(self, names: Optional[Iterable[str]] = None) -> None:
-        """Re-upload the current NumPy values to their persistent GPU mirrors.
-        Call this once per optimizer step (after optimizer.step() mutates
-        self.weights/self.biases in place) -- NOT once per layer op."""
+        """Re-upload the current NumPy values to their persistent GPU mirrors."""
         from model.mlx import ops
         if names is None:
-            keys = list(self.trainable_param_names())
+            if self.streaming():
+                keys = list(self.always_resident_keys())
+                if self._loaded_layer is not None:
+                    keys.extend(self.layer_keys(self._loaded_layer))
+            else:
+                keys = list(self.trainable_param_names())
         else:
             keys = [n for n in names if not (self.tie_embeddings and n == "lm_head")]
         for name in keys:

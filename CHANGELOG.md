@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.5
+
+Sequential layer streaming so L=32–48 at C=256 can train under the hardcoded **2 GB** Metal cap.
+
+- `layer_strategy=stream` keeps embeddings + final LN resident and pages one transformer
+  block (weights + Adam m/v + VJP working set) onto Metal at a time. Idle layer Adam
+  moments stay on host NumPy. Residual-stream checkpoints `h_in` stay on device (~48 MB
+  at L=48, B=4, T=256, C=256); host offload of `h` is not in this release.
+- Train: stream-forward → loss → recompute backward → global clip on the host grad dict
+  → stream Adam (`t += 1` once, then `step_layer`). Generate prefill/decode load/unload
+  the same way and pack KV into arenas before dropping a block. CUDA-graph decode is
+  disabled while streaming.
+- Autoscale enables stream + `eval_per_layer` **before** shrinking context `T`.
+  `--layer-stream` forces it (L=6 bring-up). `--no-layer-stream` keeps the old refuse.
+- Expect **2–4×** lower tok/s versus a fully resident stack, plus fanless thermal
+  throttle on long GEMMs. GPT-2 residual scale `1/√(2L)` stays mandatory for deep stacks.
+
 ## 0.0.4
 
 Process memory controller and a sequential-layer seam for later pipeline / layer parallel.

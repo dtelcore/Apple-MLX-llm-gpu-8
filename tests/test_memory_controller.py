@@ -132,6 +132,63 @@ class MemoryControllerTests(unittest.TestCase):
         ckpt = estimate_train_bytes(**common, gradient_checkpointing=True)
         self.assertLess(ckpt.total, full.total)
 
+    def test_l32_stream_estimate_fits_resident_does_not(self):
+        common = dict(
+            n_params=25_362_847,
+            batch_size=4,
+            max_len=256,
+            embedding_dim=256,
+            num_heads=16,
+            num_layers=32,
+            vocab_size=4112,
+            grad_accum=4,
+        )
+        stream = estimate_train_bytes(**common, layer_strategy="stream", eval_per_layer=True)
+        resident = estimate_train_bytes(**common, layer_strategy="resident")
+        self.assertLess(stream.total, PROCESS_BUDGET_BYTES, msg=stream.as_mb())
+        self.assertLess(stream.total, usable_bytes())
+        self.assertGreater(resident.total, PROCESS_BUDGET_BYTES, msg=resident.as_mb())
+
+    def test_autoscale_streams_before_shrinking_t(self):
+        common = dict(
+            n_params=25_362_847,
+            batch_size=4,
+            max_len=2048,
+            embedding_dim=256,
+            num_heads=16,
+            num_layers=32,
+            vocab_size=4112,
+            grad_accum=4,
+            gradient_checkpointing=False,
+        )
+        plan = plan_train(**common, allow_stream=True)
+        self.assertTrue(plan.fits, msg=plan.summary_line())
+        self.assertEqual(plan.layer_strategy, "stream")
+        self.assertIn("layer_strategy=stream", plan.actions)
+
+        plan_no = plan_train(**common, allow_stream=False)
+        self.assertTrue(plan_no.fits, msg=plan_no.summary_line())
+        self.assertEqual(plan_no.layer_strategy, "resident")
+        self.assertLess(plan_no.max_len, 2048)
+        self.assertGreaterEqual(plan.max_len, plan_no.max_len)
+
+    def test_no_layer_stream_refuses_to_enable(self):
+        plan = plan_train(
+            n_params=25_362_847,
+            batch_size=4,
+            max_len=256,
+            embedding_dim=256,
+            num_heads=16,
+            num_layers=32,
+            vocab_size=4112,
+            grad_accum=4,
+            autoscale=False,
+            allow_stream=False,
+            layer_strategy="resident",
+        )
+        self.assertFalse(plan.fits)
+        self.assertEqual(plan.layer_strategy, "resident")
+
 
 if __name__ == "__main__":
     unittest.main()

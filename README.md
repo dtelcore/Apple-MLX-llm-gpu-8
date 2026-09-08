@@ -4,8 +4,8 @@ From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
 
-**v0.0.4** — process memory controller. Process budget: **2 GB** of unified
-memory (hardcoded, not a CLI). Soft machine guard: **5.5 GB**.
+**v0.0.5** — sequential layer streaming under the **2 GB** process budget (hardcoded,
+not a CLI). Soft machine guard: **5.5 GB**.
 
 ```bash
 # Python 3.11 or 3.12
@@ -33,7 +33,7 @@ to the 2 GB cap for any C/L/H/T. It never changes width or depth.
 On train start it logs a plan, for example:
 
 ```text
-[memory] budget=2048MB usable=1741MB estimate=517MB B=4 accum=4 T=256 ckpt=0 fp16=0 eval_per_layer=0 | no changes (already fits)
+[memory] budget=2048MB usable=1741MB estimate=517MB B=4 accum=4 T=256 ckpt=0 fp16=0 eval_per_layer=0 layers=resident | no changes (already fits)
 ```
 
 Knobs, cheapest quality impact first:
@@ -41,12 +41,19 @@ Knobs, cheapest quality impact first:
 1. Realize the MLX graph after each layer (`eval_per_layer`)
 2. Gradient checkpointing
 3. FP16 storage for kept activations (compute stays FP32)
-4. Smaller micro-batch, more `--grad-accum` (same tokens/step)
-5. Shorter context `T` (last resort)
+4. Sequential **layer streaming** (one block + Adam on Metal)
+5. Smaller micro-batch, more `--grad-accum` (same tokens/step)
+6. Shorter context `T` (last resort)
 
 ```bash
-# default: autoscale inside 2 GB
+# default: autoscale inside 2 GB (may enable stream before shrinking T)
 python auto_train.py --config setup/story_c256_l6_config.json --no-prompt
+
+# force stream (L=6 bring-up / deep stacks)
+python auto_train.py --config ... --layer-stream --no-prompt
+
+# never stream; shrink T or refuse
+python auto_train.py --config ... --no-layer-stream --no-prompt
 
 # refuse instead of shrinking (old preflight)
 python auto_train.py --config ... --no-autoscale
@@ -56,21 +63,30 @@ python auto_train.py --config ... --memory-headroom 0.20
 ```
 
 `--no-grad-checkpoint` blocks checkpointing; the controller shrinks batch or
-context instead. Generate clips `--max-new-tokens` to the remaining window.
+enables stream before cutting context. Generate clips `--max-new-tokens` to the
+remaining window.
 
-If **weights + Adam** alone do not fit the usable budget, it still aborts.
-That needs layer-weight streaming (not in 0.0.4).
+Streaming drops **Metal** copies of idle layers. Host NumPy still holds every
+weight and idle Adam `m/v` (about 300 MB at L=32 C=256); that is fine. Peak
+Metal is O(1) in depth. Residual checkpoints stay on device; moving `h_in` to
+host is a later fallback if someone combines extreme L with large B.
 
-## Layer parallel / pipeline (prep, not shipped)
+Expect **2–4×** lower tok/s than a resident L=6 stack, and keep the lid open —
+fanless Airs thermal-throttle on long GEMMs. GPT-2 residual scale `1/√(2L)` is
+mandatory for deep stacks.
 
-`eval_per_layer` isolates each transformer block’s MLX graph so unused
-intermediates can free. That is the sequential seam a later pipeline would
-use: run layer *i*, drop its working set, optionally page its weights, run
-*i+1*.
+## Layer streaming (Phase 1)
+
+`layer_strategy=stream` loads one transformer block, runs it, then
+`unload_layer` (including `scratch_pool.clear()`). The same unfused block is
+used for resident and stream so logits/grads match. Generate packs K/V into
+per-layer arenas before unload so L=32 decode does not upload the full stack.
 
 Not in this release:
 
-- Swapping idle layer weights to host/disk
+- Prefetch / keeping 2–4 hot layers
+- `np.memmap` of params or Adam
+- Activation offload of residual `h`
 - True pipeline-parallel across processes
 - Changing L or C to “fit” the cap
 
