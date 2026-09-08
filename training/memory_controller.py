@@ -240,6 +240,9 @@ def estimate_generate_bytes(
         layer_strategy=layer_strategy,
     )
     # Generate does not keep Adam / grad / host-train accum.
+    # Do not subtract optimizer_bytes: they are not in this sum. (Resident
+    # accidentally cancelled param_host+param_device == 2P against optimizer
+    # 2P; stream has param_device << P and the subtraction went negative.)
     without_train = (
         est.param_host_bytes + est.param_device_bytes
         + est.activation_bytes + est.logits_bytes + est.workspace_bytes
@@ -250,7 +253,7 @@ def estimate_generate_bytes(
         kv_arenas = L * 2 * int(max_len) * C * _F32
     else:
         kv_arenas = 0
-    return int(without_train + kv_arenas - est.optimizer_bytes)
+    return int(without_train + kv_arenas)
 
 
 def _plan_fits(est: TrainEstimate, usable: int) -> bool:

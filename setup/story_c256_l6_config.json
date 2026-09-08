@@ -24,7 +24,7 @@
   "weight_initialization": {},
   "hyperparameters": {
     "name": "Stories C=256 L=6 T=256",
-    "learning_rate": 0.00025,
+    "learning_rate": 0.0009,
     "weight_decay": 0.01,
     "batch_size": 4,
     "num_epochs": 1,

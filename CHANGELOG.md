@@ -14,6 +14,7 @@ Sequential layer streaming so L=32–48 at C=256 can train under the hardcoded *
   disabled while streaming.
 - Autoscale enables stream + `eval_per_layer` **before** shrinking context `T`.
   `--layer-stream` forces it (L=6 bring-up). `--no-layer-stream` keeps the old refuse.
+  Generate estimates no longer subtract Adam (that underflowed to negative MB on stream).
 - Expect **2–4×** lower tok/s versus a fully resident stack, plus fanless thermal
   throttle on long GEMMs. GPT-2 residual scale `1/√(2L)` stays mandatory for deep stacks.
 

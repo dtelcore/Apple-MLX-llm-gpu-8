@@ -116,6 +116,27 @@ class MemoryControllerTests(unittest.TestCase):
         self.assertTrue(plan.fits)
         self.assertEqual(plan.max_new_tokens, 56)
 
+    def test_generate_stream_estimate_is_positive(self):
+        common = dict(
+            max_len=256,
+            embedding_dim=256,
+            vocab_size=4112,
+            prompt_len=1,
+            max_new_tokens=80,
+            layer_strategy="stream",
+        )
+        l6 = plan_generate(
+            n_params=6_000_000, num_heads=8, num_layers=6, **common,
+        )
+        self.assertGreater(l6.estimated_bytes, 0, msg=l6.summary_line())
+        self.assertTrue(l6.fits)
+        l32 = plan_generate(
+            n_params=25_362_847, num_heads=16, num_layers=32, **common,
+        )
+        self.assertGreater(l32.estimated_bytes, 0, msg=l32.summary_line())
+        self.assertLess(l32.estimated_bytes, PROCESS_BUDGET_BYTES)
+        self.assertTrue(l32.fits)
+
     def test_estimate_checkpoint_smaller_than_full(self):
         common = dict(
             n_params=25_000_000,
