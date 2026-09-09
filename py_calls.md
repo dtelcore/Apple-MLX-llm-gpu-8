@@ -184,6 +184,34 @@ python auto_train.py [flags]
 
 ---
 
+### `generate_config.py`
+
+Interactive (or `--no-prompt`) writer for `setup/*.json` recipes. Pick C / H / L / T / B / accum, residual scale, layer stream, and dataset; prints a 2 GB train estimate. Does not start training. New C/L/H needs a **new** checkpoint (do not `--resume` `chat8b`).
+
+```text
+python generate_config.py
+python generate_config.py --from setup/chat_c256_l6_config.json --embedding-dim 384 --num-layers 8 --no-prompt --output setup/chat_c384_l8_config.json
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--from` | str | `setup/chat_c256_l6_config.json` when `--no-prompt` | Base recipe |
+| `--output` | str | `setup/{kind}_c{C}_l{L}_config.json` | Destination |
+| `--embedding-dim` | int | from base | **C** |
+| `--num-heads` | int | from base | **H** (must divide C) |
+| `--num-layers` | int | from base | **L** (L≥6 requires residual scale) |
+| `--max-len` | int | from base | **T** |
+| `--batch-size` | int | from base | **B** |
+| `--grad-accum` | int | from base | |
+| `--residual-scale` | `on`\|`off` | from base / on if L≥6 | |
+| `--layer-strategy` | `resident`\|`stream` | from base | |
+| `--dataset` | str | from base | e.g. `chat_train`, `data_dir` |
+| `--combine` / `--no-combine` | flag | from base | `data/*.txt` concat |
+| `--no-prompt` | flag | off | Flags only |
+| `--force` | flag | off | Overwrite existing JSON |
+
+---
+
 ### `generate.py`
 
 ```text
@@ -506,6 +534,7 @@ These are imported by the entry points above; they have no project-facing argpar
 |---------|---------|
 | `train.py` | Train / resume / generate menu / quality |
 | `auto_train.py` | Train + smoke generate |
+| `generate_config.py` | Interactive `setup/*.json` recipe writer (C/H/L/T/B, 2 GB estimate) |
 | `generate.py` | One-shot sample (KV on by default) |
 | `interactive.py` | Generation REPL |
 | `bench_step.py` | Train-step microbench |

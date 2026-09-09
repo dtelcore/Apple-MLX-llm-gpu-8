@@ -20,9 +20,11 @@ def resolve_dataset_corpus(dataset_cfg: Dict, data_dir: str = None) -> List[str]
     """Return corpus text from inline config, combined data dir, or dataset name.
 
     Combined-directory mode (`combine: true` or `name: data_dir`) loads every
-    non-empty line from sorted `*.txt` files under `data_dir`. Inline `corpus`
-    still wins so tests and baked-in configs keep working. Single-file stems
-    and built-in names are unchanged.
+    non-empty line from sorted `*.txt` files under `data_dir`. An explicit
+    `path` / `dataset_path` always wins over combine so a tiny JSONL/txt file
+    is not swallowed by neighboring corpora. Inline `corpus` still wins so
+    tests and baked-in configs keep working. Single-file stems and built-in
+    names are unchanged.
     """
     corpus = dataset_cfg.get("corpus")
     if corpus:
@@ -30,6 +32,19 @@ def resolve_dataset_corpus(dataset_cfg: Dict, data_dir: str = None) -> List[str]
 
     resolved_dir = data_dir or str(DATA_DIR)
     loader = DatasetLoader(data_dir=resolved_dir)
+
+    explicit = dataset_cfg.get("path") or dataset_cfg.get("dataset_path")
+    if explicit:
+        from paths import PROJECT_ROOT
+        path = Path(str(explicit))
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        logger.info(
+            "Loading dataset from explicit path %s (combine=%s ignored)",
+            path, bool(dataset_cfg.get("combine")),
+        )
+        return loader.load_from_file(str(path), dataset_cfg.get("name") or path.stem)
+
     if is_combined_dataset(dataset_cfg):
         try:
             return loader.load_combined_directory(resolved_dir)

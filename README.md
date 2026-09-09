@@ -14,6 +14,7 @@ pip install -r requirements.txt
 python setup/2_test_workspace.py          # Metal + matmul + memory APIs
 python -m tests.parity.run_parity
 python auto_train.py --config setup/story_c256_l6_config.json --steps 20 --no-prompt
+python generate_config.py          # write a setup/*.json recipe (C/H/L/T/B)
 ```
 
 Stable English recipe on this Air: `setup/story_c256_l6_config.json`

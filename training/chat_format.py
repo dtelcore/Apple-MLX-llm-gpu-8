@@ -30,8 +30,8 @@ _TRAILING_PARTIAL_USER = re.compile(r"(?:\s+User:?|\s+Use|\s+Us|\s+U)$")
 
 
 def is_chat_model_name(name: Optional[str]) -> bool:
-    text = (name or "").lower()
-    return "chat_5m" in text or "chat 5m" in text
+    text = (name or "").lower().strip()
+    return text.startswith("chat") or "chat_" in text or " chat " in f" {text} "
 
 
 def format_turn(role: str, text: str) -> str:

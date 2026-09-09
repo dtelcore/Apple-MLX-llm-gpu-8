@@ -52,6 +52,10 @@ def parse_args() -> argparse.Namespace:
         help="Resume training from --checkpoint (latest, best/, or quarter_*)",
     )
     parser.add_argument("--prompt", type=str, default="the", help="Prompt for the post-training smoke sample")
+    parser.add_argument(
+        "--stop", action="append", default=None,
+        help="Stop generating when this string appears in new text (repeatable)",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=80, help="Characters to generate for the smoke sample")
     parser.add_argument(
         "--temperature", type=float, default=DEFAULT_GENERATE_PROBE_TEMPERATURE,

@@ -17,6 +17,7 @@ from training.chat_format import (
     USER_ROLE,
     build_chat_prompt_ids,
     format_conversation,
+    is_chat_model_name,
     sanitize_assistant_reply,
     trim_generated_stop_strings,
 )
@@ -38,6 +39,11 @@ class _CharTok:
 
 
 class ChatFormatTests(unittest.TestCase):
+    def test_chat_model_name_matches_c512_recipe(self):
+        self.assertTrue(is_chat_model_name("chat_5m"))
+        self.assertTrue(is_chat_model_name("Chat C=512 L=6 T=512"))
+        self.assertFalse(is_chat_model_name("Story C=256 L=6 T=256"))
+
     def test_single_line_role_markers(self):
         text = format_conversation(
             [],

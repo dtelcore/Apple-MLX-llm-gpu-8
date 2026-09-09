@@ -11,6 +11,7 @@ Provides:
 Target: NVIDIA GeForce GT 730 (1-2GB VRAM constraint)
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -31,6 +32,31 @@ except ImportError:
 
 # Reserved dataset name: concatenate every non-empty line from sorted data/*.txt.
 COMBINED_DATASET_NAME = "data_dir"
+
+
+def _native_line_from_jsonl(line: str) -> Optional[str]:
+    """Turn one query/response JSONL record into a User:/Assistant: train line."""
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    user = ""
+    assistant = ""
+    if isinstance(rec, dict):
+        query = rec.get("query") or {}
+        response = rec.get("response") or {}
+        if isinstance(query, dict):
+            user = str(query.get("user") or "")
+        if isinstance(response, dict):
+            assistant = str(response.get("assistant") or "")
+        user = user or str(rec.get("user") or "")
+        assistant = assistant or str(rec.get("assistant") or "")
+    if not user.strip() or not assistant.strip():
+        return None
+    from training.chat_format import ASSISTANT_PREFIX, USER_PREFIX
+    u = " ".join(user.split())
+    a = " ".join(assistant.split())
+    return f"{USER_PREFIX}{u} {ASSISTANT_PREFIX}{a}".rstrip()
 
 
 BUILTIN_DATASETS = {
@@ -213,11 +239,18 @@ class DatasetLoader:
         corpus = []
         basename = os.path.basename(filepath)
         logger.info(f"Loading corpus from file: {filepath}")
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as handle:
+        is_jsonl = Path(filepath).suffix.lower() == ".jsonl"
+        with open(filepath, "r", encoding="utf-8", errors="replace") as handle:
             for raw_line in tqdm(handle, desc=f"Loading corpus: {basename}", unit="line"):
                 line = raw_line.strip()
-                if line:
-                    corpus.append(line)
+                if not line:
+                    continue
+                if is_jsonl:
+                    converted = _native_line_from_jsonl(line)
+                    if converted:
+                        corpus.append(converted)
+                    continue
+                corpus.append(line)
 
         if not corpus:
             logger.error(f"No text content found in {filepath}")
