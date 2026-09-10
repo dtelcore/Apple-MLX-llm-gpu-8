@@ -13,10 +13,28 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from setup.config_loader import resolve_dataset_corpus
-from tools.make_fact_mix import _NEONICS_USER, build_pairs, neonics_pair, write_outputs
+from tools.make_fact_mix import (
+    _NEONICS_USER,
+    build_pairs,
+    load_user_facts,
+    neonics_pair,
+    write_outputs,
+)
 
 
 class FactMixTests(unittest.TestCase):
+    def test_load_user_facts_skips_hash_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "user_facts.txt"
+            path.write_text(
+                "# ignore this User: Tell me about X. Assistant: skip\n"
+                "User: What is the current version? Assistant: Version 0.0.5.\n",
+                encoding="utf-8",
+            )
+            pairs = load_user_facts([path])
+            self.assertEqual(len(pairs), 1)
+            self.assertEqual(pairs[0][0], "What is the current version?")
+
     def test_neonics_repeated_and_written(self):
         pairs = build_pairs(user_facts=[], wiki_core=[], user_repeat=3, wiki_repeat=1)
         self.assertGreaterEqual(len(pairs), 3)

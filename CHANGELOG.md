@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.0.6
+
+Chat **fact data pipelines** and the learning rules that actually stick on this 2 GB Air.
+
+- Facts live as exact `User: … Assistant: …` lines. `tools/make_fact_mix.py` repeats
+  `data/user_facts.txt` plus `data/facts/*.txt` and writes `data/chat_facts.jsonl`.
+  `setup/chat_facts_config.json` trains **only** that file (`combine: false`, explicit
+  `path`). `combine: true` or `chat_c256_l6_config.json` / `chat_train.txt` wash the
+  cabinet out with ~1M unique wraps.
+- What stuck in training: C=512 L=6 T=256 stream, ~20M params. **~300 repeats** of a
+  few dozen short Q&As recites (v2). **20 repeats** of a 300-topic wiki slice in 300
+  steps does not. New words need a **new BPE and a new checkpoint**, not `--resume`.
+- `tools/wikidata_to_facts.py` pulls modest SPARQL groups (capitals, elements,
+  inventors, birth years) into `data/facts/wikidata_facts.txt`. Drops Q-id labels.
+  Uses stdlib urllib (optional SPARQLWrapper). Keep LIMITs small.
+- Dataset `path` / `dataset_path` always wins over combine. JSONL query/response
+  records load as native chat lines. `--stop` on generate/auto_train cuts at `User:`.
+
 ## 0.0.5
 
 Sequential layer streaming so L=32–48 at C=256 can train under the hardcoded **2 GB** Metal cap.

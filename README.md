@@ -4,8 +4,8 @@ From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
 
-**v0.0.5** — sequential layer streaming under the **2 GB** process budget (hardcoded,
-not a CLI). Soft machine guard: **5.5 GB**.
+**v0.0.6** — chat fact data pipelines under the **2 GB** process budget (hardcoded,
+not a CLI). Soft machine guard: **5.5 GB**. Layer streaming is from 0.0.5.
 
 ```bash
 # Python 3.11 or 3.12
@@ -15,11 +15,20 @@ python setup/2_test_workspace.py          # Metal + matmul + memory APIs
 python -m tests.parity.run_parity
 python auto_train.py --config setup/story_c256_l6_config.json --steps 20 --no-prompt
 python generate_config.py          # write a setup/*.json recipe (C/H/L/T/B)
+python tools/wikidata_to_facts.py  # optional: SPARQL → data/facts/wikidata_facts.txt
+python tools/make_fact_mix.py      # repeat facts → data/chat_facts.jsonl
+python auto_train.py --config setup/chat_facts_config.json --checkpoint output/checkpoints/chat_facts_v2 --steps 300 --no-prompt
 ```
 
 Stable English recipe on this Air: `setup/story_c256_l6_config.json`
 (C=256, L=6, T=256, batch 4, accum 4, GPT-2 residual scale). Smaller smoke:
 `setup/story_sub1m_config.json` (C=128, L=4, T=128, batch 8).
+
+Chat cabinet (memorize your Q&A, not Wikipedia): native lines in
+`data/user_facts.txt` and `data/facts/*.txt`, mix with `tools/make_fact_mix.py`,
+train `setup/chat_facts_config.json` on `data/chat_facts.jsonl` only. Do not
+`combine` `data/*.txt`. Probe with the **exact** `User:` wording and `--stop User:`.
+A few dozen facts at ~300 repeats stick; hundreds of unique facts at 20 repeats do not.
 
 Keep the lid open on this fanless Air; long GEMMs will thermal-throttle.
 

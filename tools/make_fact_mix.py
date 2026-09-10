@@ -4,9 +4,10 @@ tools/make_fact_mix.py
 Build a tiny repeated User/Assistant corpus for weight-side memorization.
 
 Writes:
-  data/fact_overfit.txt              (train this)
-  data/fact_overfit_train.jsonl      (same pairs, query/response)
+  data/chat_facts.txt                (train this)
+  data/chat_facts.jsonl              (same pairs, query/response)
 
+Also loads data/user_facts.txt and data/facts/*.txt (e.g. Wikidata export).
 Does not concatenate data/train.txt or the full chat_train dump.
 """
 
@@ -54,7 +55,10 @@ def load_user_facts(paths: Sequence[Path]) -> List[Tuple[str, str]]:
             continue
         with path.open(encoding="utf-8", errors="replace") as handle:
             for raw in handle:
-                pair = _split_native(raw)
+                stripped = raw.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                pair = _split_native(stripped)
                 if pair:
                     out.append(pair)
     return out
@@ -125,13 +129,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a repeated chat fact-overfit corpus")
     parser.add_argument("--chat-train", type=str, default=str(ROOT / "data" / "chat_train.txt"))
     parser.add_argument("--user-facts", type=str, default=str(ROOT / "data" / "user_facts.txt"))
-    parser.add_argument("--output", type=str, default=str(ROOT / "data" / "fact_overfit.txt"))
+    parser.add_argument("--output", type=str, default=str(ROOT / "data" / "chat_facts.txt"))
     parser.add_argument(
-        "--jsonl", type=str, default=str(ROOT / "data" / "fact_overfit_train.jsonl"),
+        "--jsonl", type=str, default=str(ROOT / "data" / "chat_facts.jsonl"),
     )
-    parser.add_argument("--max-wiki-facts", type=int, default=50)
-    parser.add_argument("--user-repeat", type=int, default=200)
-    parser.add_argument("--wiki-repeat", type=int, default=20)
+    parser.add_argument("--max-wiki-facts", type=int, default=0)
+    parser.add_argument("--user-repeat", type=int, default=300)
+    parser.add_argument("--wiki-repeat", type=int, default=10)
     return parser.parse_args(argv)
 
 

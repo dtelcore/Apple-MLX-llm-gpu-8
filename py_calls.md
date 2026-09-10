@@ -1,6 +1,6 @@
 # py_calls.md — runnable entry points
 
-**Apple MLX (this tree, v0.0.5):** MacBook Air M3, 2 GB process cap. Start with
+**Apple MLX (this tree, v0.0.6):** MacBook Air M3, 2 GB process cap. Start with
 [`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
 
 Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
@@ -77,7 +77,9 @@ Shared flag groups live in [`cli_common.py`](cli_common.py) and are referenced b
 | `--layer-stream` | flag | off (force one-block Metal streaming) |
 | `--no-layer-stream` | flag | off (never autoscale into stream; shrink T or refuse) |
 
-v0.0.5: `training/memory_controller.py` autoscales batch/context/activations and may enable sequential layer streaming **before** shrinking `T`. Architecture is never changed. See [`README.md`](README.md). Residual checkpoints stay on device; expect 2–4× tok/s vs resident L=6.
+v0.0.5+: `training/memory_controller.py` autoscales batch/context/activations and may enable sequential layer streaming **before** shrinking `T`. Architecture is never changed. See [`README.md`](README.md). Residual checkpoints stay on device; expect 2–4× tok/s vs resident L=6.
+
+v0.0.6: chat facts train `setup/chat_facts_config.json` → `data/chat_facts.jsonl` only. `combine: true` concatenates every `data/*.txt` and overwrites the cabinet.
 
 ### Generate probes `(shared: probe)`
 
@@ -209,6 +211,47 @@ python generate_config.py --from setup/chat_c256_l6_config.json --embedding-dim 
 | `--combine` / `--no-combine` | flag | from base | `data/*.txt` concat |
 | `--no-prompt` | flag | off | Flags only |
 | `--force` | flag | off | Overwrite existing JSON |
+
+### `tools/make_fact_mix.py`
+
+Repeat native `User:` / `Assistant:` lines into the chat cabinet. Loads
+`data/user_facts.txt` and `data/facts/*.txt`. Default wiki slice from
+`chat_train.txt` is **off** (`--max-wiki-facts 0`). Writes `data/chat_facts.txt`
+and `data/chat_facts.jsonl`. Train those with `setup/chat_facts_config.json`,
+not `chat_c256_l6_config.json`.
+
+```text
+python tools/make_fact_mix.py
+python tools/make_fact_mix.py --user-repeat 300 --wiki-repeat 10 --max-wiki-facts 0
+```
+
+| Flag | Type | Default |
+|------|------|---------|
+| `--user-facts` | str | `data/user_facts.txt` |
+| `--chat-train` | str | `data/chat_train.txt` |
+| `--output` | str | `data/chat_facts.txt` |
+| `--jsonl` | str | `data/chat_facts.jsonl` |
+| `--max-wiki-facts` | int | `0` |
+| `--user-repeat` | int | `300` |
+| `--wiki-repeat` | int | `10` |
+
+### `tools/wikidata_to_facts.py`
+
+SPARQL groups → native chat lines under `data/facts/` (picked up by make_fact_mix).
+Keeps LIMIT modest. Drops Q-id labels. Uses stdlib urllib; `SPARQLWrapper` if installed.
+
+```text
+python tools/wikidata_to_facts.py
+python tools/wikidata_to_facts.py --queries capitals elements --limit 40
+python tools/wikidata_to_facts.py --output data/facts/my_wikidata.txt
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--queries` | str+ | `capitals elements` | `capitals`, `inventors`, `birth_years`, `elements` |
+| `--output` | str | `data/facts/wikidata_facts.txt` | |
+| `--sleep` | float | `1.0` | Pause between groups |
+| `--limit` | int | query default | Override SPARQL LIMIT |
 
 ---
 
@@ -535,6 +578,8 @@ These are imported by the entry points above; they have no project-facing argpar
 | `train.py` | Train / resume / generate menu / quality |
 | `auto_train.py` | Train + smoke generate |
 | `generate_config.py` | Interactive `setup/*.json` recipe writer (C/H/L/T/B, 2 GB estimate) |
+| `tools/make_fact_mix.py` | Repeat user/Wikidata facts → `data/chat_facts.jsonl` |
+| `tools/wikidata_to_facts.py` | Wikidata SPARQL → `data/facts/wikidata_facts.txt` |
 | `generate.py` | One-shot sample (KV on by default) |
 | `interactive.py` | Generation REPL |
 | `bench_step.py` | Train-step microbench |
