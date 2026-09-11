@@ -6,7 +6,7 @@
     "embedding_dim": 512,
     "num_heads": 8,
     "num_layers": 6,
-    "dropout_prob": 0.0,
+    "dropout_prob": 0.1,
     "tie_embeddings": true,
     "norm_type": "rmsnorm",
     "pos_encoding": "rope",

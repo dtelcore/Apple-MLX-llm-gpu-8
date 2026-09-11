@@ -69,7 +69,7 @@ def load_user_facts(paths: Sequence[Path]) -> List[Tuple[str, str]]:
 def load_wiki_core(chat_train: Path, *, max_facts: int) -> List[Tuple[str, str]]:
     seen = set()
     core: List[Tuple[str, str]] = []
-    if not chat_train.is_file():
+    if max_facts <= 0 or not chat_train.is_file():
         return core
     with chat_train.open(encoding="utf-8", errors="replace") as handle:
         for raw in handle:

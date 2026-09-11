@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.7
+
+Python **router** around one chat checkpoint: cabinet lookup, then calc, then Wikipedia.
+
+- `interactive.py` defaults `--router` on for chat checkpoints (`--no-router` for story).
+  Hits feed the stored `User: … Assistant:` prompt into generate (temp 0.2). `2+2` is
+  AST+Decimal (`tools/calc.py`, no `eval`). Unknown `What is …` questions use
+  Wikipedia via stdlib urllib (`tools/wiki_search.py`). Network/empty extract falls
+  through to a polite miss; snippets are not fed back into the GPT.
+- Exact normalized cabinet index: [`training/cabinet_index.py`](training/cabinet_index.py).
+  No fuzzy match (unobtanium must not hit layer-streaming). Cabinet wins over calc
+  (`What is 0 factorial?`). One checkpoint only — do not load a story net in the
+  same process (2 GB cap).
+- Do not `combine: true`. Do not `--resume` v4 into a new mix. Keep
+  `output/checkpoints/chat_facts_v4` as the 105×300 recitation baseline.
+
 ## 0.0.6
 
 Chat **fact data pipelines** and the learning rules that actually stick on this 2 GB Air.

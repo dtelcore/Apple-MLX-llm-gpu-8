@@ -4,8 +4,9 @@ From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
 
-**v0.0.6** — chat fact data pipelines under the **2 GB** process budget (hardcoded,
-not a CLI). Soft machine guard: **5.5 GB**. Layer streaming is from 0.0.5.
+**v0.0.7** — chat **router** (cabinet → calc → Wikipedia) under the **2 GB**
+process budget (hardcoded, not a CLI). Soft machine guard: **5.5 GB**. Fact
+pipelines are from 0.0.6; layer streaming is from 0.0.5.
 
 ```bash
 # Python 3.11 or 3.12
@@ -17,8 +18,15 @@ python auto_train.py --config setup/story_c256_l6_config.json --steps 20 --no-pr
 python generate_config.py          # write a setup/*.json recipe (C/H/L/T/B)
 python tools/wikidata_to_facts.py  # optional: SPARQL → data/facts/wikidata_facts.txt
 python tools/make_fact_mix.py      # repeat facts → data/chat_facts.jsonl
-python auto_train.py --config setup/chat_facts_config.json --checkpoint output/checkpoints/chat_facts_v2 --steps 300 --no-prompt
+python auto_train.py --config setup/chat_facts_config.json --checkpoint output/checkpoints/chat_facts_v5 --steps 1000 --no-prompt
+python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
 ```
+
+Chat checkpoints default to a **Python router**: exact cabinet hit → generate the
+stored `User: … Assistant:` line; `2+2` → Decimal calc; unknown `What is …` →
+Wikipedia summary; otherwise a miss plus a hint to a **separate** story REPL
+(`--no-router`). Never load two checkpoints in one process. `--no-search` skips
+the network. Do not `combine` `data/*.txt`.
 
 Stable English recipe on this Air: `setup/story_c256_l6_config.json`
 (C=256, L=6, T=256, batch 4, accum 4, GPT-2 residual scale). Smaller smoke:

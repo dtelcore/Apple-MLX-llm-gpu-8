@@ -1,6 +1,6 @@
 # py_calls.md — runnable entry points
 
-**Apple MLX (this tree, v0.0.6):** MacBook Air M3, 2 GB process cap. Start with
+**Apple MLX (this tree, v0.0.7):** MacBook Air M3, 2 GB process cap. Start with
 [`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
 
 Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
@@ -80,6 +80,8 @@ Shared flag groups live in [`cli_common.py`](cli_common.py) and are referenced b
 v0.0.5+: `training/memory_controller.py` autoscales batch/context/activations and may enable sequential layer streaming **before** shrinking `T`. Architecture is never changed. See [`README.md`](README.md). Residual checkpoints stay on device; expect 2–4× tok/s vs resident L=6.
 
 v0.0.6: chat facts train `setup/chat_facts_config.json` → `data/chat_facts.jsonl` only. `combine: true` concatenates every `data/*.txt` and overwrites the cabinet.
+
+v0.0.7: `interactive.py` router (cabinet → calc → Wikipedia). Chat checkpoints default `--router` on. Do not load a second checkpoint in that process.
 
 ### Generate probes `(shared: probe)`
 
@@ -288,23 +290,30 @@ python generate.py --checkpoint output\checkpoints\BiggerTest256256 --cuda-graph
 
 ### `interactive.py`
 
-REPL; session commands: `:temp`, `:tokens`, `:topk`, `:topp`, `:trace on|off`, `:quit`. Chat mode adds `:clear`, `:system`.
+REPL; session commands: `:temp`, `:tokens`, `:topk`, `:topp`, `:trace on|off`, `:quit`. Chat mode adds `:clear`, `:system`. Router adds `:search`, `:calc`, `:route`.
+
+Chat checkpoints default **`--router`**: cabinet exact hit → generate stored `User: … Assistant:` (temp 0.2); else calc; else Wikipedia; else miss. Story checkpoints default generate-every-turn. One checkpoint only (2 GB). `--no-search` skips the network.
 
 ```text
-python interactive.py [flags]
+python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
+python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --no-router
+python interactive.py --checkpoint output/checkpoints/<story> --no-router
 ```
 
 | Flag | Type | Default |
 |------|------|---------|
 | *(shared: checkpoint, seed, trace)* | | |
-| `--chat` | flag | off (auto-on for Chat 5M checkpoints) |
+| `--chat` | flag | off (auto-on for chat-named checkpoints) |
 | `--no-chat` | flag | off |
 | `--system` | str | simple-assistant line in chat mode |
 | `--stop` | str (repeatable) | `User:` markers in chat mode |
-| `--temperature` | float | `0.8` (chat: **0.7**) |
+| `--temperature` | float | `0.8` (chat: **0.7**; cabinet route uses **0.2**) |
 | `--max-new-tokens` | int | `80` |
 | `--top-k` | int | `None` (chat: **32**) |
 | `--top-p` | float | `None` (chat: **0.9**) |
+| `--router` / `--no-router` | flags | chat name → on; story → off |
+| `--facts` | str | `data/chat_facts.jsonl` |
+| `--no-search` | flag | off |
 | `--no-kv-cache` / `--cuda-graph` | flags | KV on; graph off |
 
 ---
@@ -581,7 +590,9 @@ These are imported by the entry points above; they have no project-facing argpar
 | `tools/make_fact_mix.py` | Repeat user/Wikidata facts → `data/chat_facts.jsonl` |
 | `tools/wikidata_to_facts.py` | Wikidata SPARQL → `data/facts/wikidata_facts.txt` |
 | `generate.py` | One-shot sample (KV on by default) |
-| `interactive.py` | Generation REPL |
+| `interactive.py` | Generation REPL (chat checkpoints default `--router`) |
+| `tools/calc.py` | Safe AST+Decimal arithmetic (used by the router) |
+| `tools/wiki_search.py` | Wikipedia OpenSearch + summary (used by the router) |
 | `bench_step.py` | Train-step microbench |
 | `bench_profile.py` | Fwd/bwd/opt split |
 | `bench_mlp_fusion.py` | MLP fusion A/B |
