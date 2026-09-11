@@ -41,6 +41,7 @@ from paths import DATA_DIR, OUTPUT_ROOT, ensure_output_dirs
 from training.router import (
     MISS_HINT,
     RouteDecision,
+    alias_learned_topics,
     remember_search_hit,
     route,
     router_enabled,
@@ -138,6 +139,7 @@ def _load_index(facts_path: str, learned_path: str) -> CabinetIndex:
         print(f"[router] could not load facts: {exc}")
     n_trained = len(index)
     n_learned = merge_cabinet(index, learned_path, source="learned")
+    alias_learned_topics(index)
     print(
         f"[router] cabinet index: {len(index)} unique "
         f"({n_trained} trained from {src}, {n_learned} learned from {learned_path})"

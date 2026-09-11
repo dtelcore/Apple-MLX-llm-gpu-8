@@ -99,6 +99,7 @@ class CabinetIndex:
 
     def __init__(self, facts: Optional[Dict[str, CabinetFact]] = None):
         self._facts: Dict[str, CabinetFact] = dict(facts or {})
+        self._aliases: Dict[str, CabinetFact] = {}
 
     def __len__(self) -> int:
         return len(self._facts)
@@ -107,7 +108,7 @@ class CabinetIndex:
         key = normalize_question(text)
         if not key:
             return None
-        return self._facts.get(key)
+        return self._facts.get(key) or self._aliases.get(key)
 
     def add(self, user: str, assistant: str, *, source: str = "trained") -> Optional[CabinetFact]:
         key = normalize_question(user)
@@ -127,6 +128,17 @@ class CabinetIndex:
         )
         self._facts[key] = fact
         return fact
+
+    def add_alias(self, text: str, fact: CabinetFact) -> bool:
+        """In-memory lookup alias. Not a second stored question."""
+        key = normalize_question(text)
+        if not key or key in self._facts or key in self._aliases:
+            return False
+        self._aliases[key] = fact
+        return True
+
+    def unique_facts(self) -> Iterator[CabinetFact]:
+        yield from self._facts.values()
 
 
 def _pairs_from_path(path: Path) -> Iterator[tuple]:

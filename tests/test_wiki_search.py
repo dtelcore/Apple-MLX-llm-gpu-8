@@ -47,6 +47,27 @@ class WikiSearchTests(unittest.TestCase):
         ):
             self.assertIsNone(wiki_search.wiki_summary("What is unobtanium"))
 
+    def test_skips_disambiguation_for_next_title(self):
+        open_search = ["python", ["Python", "Python (programming language)"], ["", ""], ["", ""]]
+        dab = {"title": "Python", "type": "disambiguation", "extract": "Python may refer to:"}
+        real = {
+            "title": "Python (programming language)",
+            "type": "standard",
+            "extract": "Python is a high-level programming language.",
+        }
+
+        def fake_urlopen(req, timeout=8.0):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "opensearch" in url:
+                return _http_json(open_search)
+            if "Python_%28programming_language%29" in url:
+                return _http_json(real)
+            return _http_json(dab)
+
+        with mock.patch("tools.wiki_search.urllib.request.urlopen", side_effect=fake_urlopen):
+            text = wiki_search.wiki_summary("python")
+        self.assertEqual(text, "Python is a high-level programming language.")
+
     def test_empty_extract_returns_none(self):
         open_search = ["x", ["X"], [""], ["http://example"]]
         summary = {"title": "X", "extract": "   "}

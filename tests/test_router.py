@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from training.cabinet_index import CabinetIndex
+from training.cabinet_index import CabinetIndex, merge_cabinet
 from training.router import MISS_HINT, looks_like_fact_question, remember_search_hit, route
 
 
@@ -101,6 +102,11 @@ class RouterTests(unittest.TestCase):
                 "tell me about ford",
                 "Ford Motor Company is an American automaker.",
             )
+            lines = path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(lines), 1)
+            rec = json.loads(lines[0])
+            self.assertEqual(rec["query"]["user"], "tell me about ford")
+
             d = route("tell me about ford", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
             self.assertEqual(d.kind, "cabinet")
             self.assertEqual(d.detail, "cabinet learned")
@@ -109,6 +115,14 @@ class RouterTests(unittest.TestCase):
             d2 = route("what is a ford ?", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
             self.assertEqual(d2.kind, "cabinet")
             self.assertEqual(d2.detail, "cabinet learned")
+
+            reloaded = CabinetIndex()
+            merge_cabinet(reloaded, path, source="learned")
+            from training.router import alias_learned_topics
+            alias_learned_topics(reloaded)
+            d3 = route("what is a ford ?", reloaded, search_fn=lambda q: "SHOULD NOT SEARCH")
+            self.assertEqual(d3.kind, "cabinet")
+            self.assertEqual(len(reloaded), 1)
 
     def test_looks_like_fact_question(self):
         self.assertTrue(looks_like_fact_question("What is unobtanium"))

@@ -131,14 +131,26 @@ def remember_search_hit(
     typed: str,
     extract: str,
 ) -> Optional[CabinetFact]:
-    """Persist a Wikipedia extract under the typed question and its search topic."""
+    """Persist one JSONL line for the typed question; topic is a memory alias only."""
     if index is None or not extract:
         return None
     fact = remember(index, path, typed, extract)
+    if fact is None:
+        return None
     topic = search_topic(typed)
     if topic:
-        remember(index, path, topic, extract)
+        index.add_alias(topic, fact)
     return fact
+
+
+def alias_learned_topics(index: CabinetIndex) -> None:
+    """Rebuild topic aliases after loading learned JSONL (not written to disk)."""
+    for fact in list(index.unique_facts()):
+        if fact.source != "learned":
+            continue
+        topic = search_topic(fact.user)
+        if topic:
+            index.add_alias(topic, fact)
 
 
 def route(

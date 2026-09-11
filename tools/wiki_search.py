@@ -19,6 +19,9 @@ USER_AGENT = (
 DEFAULT_TIMEOUT_S = 8.0
 
 
+OPENSEARCH_LIMIT = 5
+
+
 def _get_json(url: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> Optional[object]:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
@@ -32,26 +35,32 @@ def _get_json(url: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> Optional[objec
         return None
 
 
-def _opensearch_title(query: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> Optional[str]:
+def _opensearch_titles(query: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> list:
     params = urllib.parse.urlencode(
         {
             "action": "opensearch",
             "search": query,
-            "limit": "1",
+            "limit": str(OPENSEARCH_LIMIT),
             "namespace": "0",
             "format": "json",
         }
     )
     data = _get_json(f"{OPENSEARCH_URL}?{params}", timeout=timeout)
     if not isinstance(data, list) or len(data) < 2:
-        return None
+        return []
     titles = data[1]
-    if not isinstance(titles, list) or not titles:
-        return None
-    title = titles[0]
-    if not isinstance(title, str) or not title.strip():
-        return None
-    return title.strip()
+    if not isinstance(titles, list):
+        return []
+    out = []
+    for title in titles:
+        if isinstance(title, str) and title.strip():
+            out.append(title.strip())
+    return out
+
+
+def _is_stub_extract(text: str) -> bool:
+    t = text.casefold().rstrip(" .")
+    return t.endswith("may refer to")
 
 
 def _summary_extract(title: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> Optional[str]:
@@ -59,11 +68,15 @@ def _summary_extract(title: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> Optio
     data = _get_json(SUMMARY_URL + quoted, timeout=timeout)
     if not isinstance(data, dict):
         return None
+    if data.get("type") == "disambiguation":
+        return None
     extract = data.get("extract") or data.get("description")
     if not isinstance(extract, str):
         return None
     text = " ".join(extract.split())
-    return text or None
+    if not text or _is_stub_extract(text):
+        return None
+    return text
 
 
 def wiki_summary(query: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> Optional[str]:
@@ -71,7 +84,8 @@ def wiki_summary(query: str, *, timeout: float = DEFAULT_TIMEOUT_S) -> Optional[
     q = " ".join((query or "").split())
     if not q:
         return None
-    title = _opensearch_title(q, timeout=timeout)
-    if not title:
-        return None
-    return _summary_extract(title, timeout=timeout)
+    for title in _opensearch_titles(q, timeout=timeout):
+        extract = _summary_extract(title, timeout=timeout)
+        if extract:
+            return extract
+    return None
