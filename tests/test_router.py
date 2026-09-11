@@ -37,6 +37,14 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(d.kind, "calc")
         self.assertEqual(d.text, "4")
 
+    def test_what_is_one_plus_one_is_calc_not_wikipedia(self):
+        def boom(_q):
+            self.fail("search must not run for what is 1 + 1")
+
+        d = route("what is 1 + 1", self.index, search_enabled=True, search_fn=boom)
+        self.assertEqual(d.kind, "calc")
+        self.assertEqual(d.text, "2")
+
     def test_unobtanium_search_success(self):
         d = route(
             "What is unobtanium",

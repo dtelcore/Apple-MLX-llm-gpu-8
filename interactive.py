@@ -38,7 +38,7 @@ import cli_common
 from logging_config import logger, setup_generate_run_logging
 from model.gpt import GPTModel
 from paths import DATA_DIR, ensure_output_dirs
-from tools.calc import try_calc
+from training.router import MISS_HINT, RouteDecision, route, router_enabled, try_calc_query
 from tools.wiki_search import wiki_summary
 from training.cabinet_index import CabinetIndex, load_cabinet
 from training.checkpoint import load_checkpoint
@@ -54,7 +54,6 @@ from training.chat_format import (
     is_chat_model_name,
     sanitize_assistant_reply,
 )
-from training.router import MISS_HINT, RouteDecision, route, router_enabled
 
 CABINET_GENERATE_TEMP = 0.2
 CABINET_GENERATE_TOP_K = 10
@@ -287,7 +286,7 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
             continue
         if router_on and prompt.startswith(":calc"):
             expr = prompt[len(":calc"):].strip()
-            value = try_calc(expr) if expr else None
+            value = try_calc_query(expr) if expr else None
             if value is not None:
                 last_route = RouteDecision(kind="calc", text=value, detail="calc_forced")
                 _emit_user_reply(expr, value)

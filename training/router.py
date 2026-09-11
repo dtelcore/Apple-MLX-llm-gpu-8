@@ -39,6 +39,17 @@ _FACT_PREFIXES = (
     "how much",
 )
 
+# Strip these before retrying calc so "what is 1 + 1" is arithmetic, not Wikipedia.
+_CALC_WRAPPERS = (
+    "what is the value of",
+    "what is",
+    "what's",
+    "whats",
+    "calculate",
+    "compute",
+)
+_CALC_OPS = set("+-*/^%")
+
 
 @dataclass(frozen=True)
 class RouteDecision:
@@ -53,6 +64,40 @@ def router_enabled(explicit: Optional[bool], model_name: str) -> bool:
     if explicit is not None:
         return bool(explicit)
     return is_chat_model_name(model_name)
+
+
+def _bare_query(text: str) -> str:
+    s = " ".join((text or "").split())
+    if s.casefold().startswith("user:"):
+        s = s.split(":", 1)[1].strip()
+        s = " ".join(s.split())
+    return s
+
+
+def _calc_remainder(text: str) -> Optional[str]:
+    s = _bare_query(text)
+    low = s.casefold()
+    for prefix in sorted(_CALC_WRAPPERS, key=len, reverse=True):
+        if low.startswith(prefix):
+            rest = s[len(prefix):].strip(" :?")
+            rest = " ".join(rest.split())
+            return rest or None
+    return None
+
+
+def try_calc_query(text: str) -> Optional[str]:
+    """Calc on the raw text, or on a 'what is …' remainder that is an expression."""
+    hit = try_calc(text)
+    if hit is not None:
+        return hit
+    rest = _calc_remainder(text)
+    if not rest:
+        return None
+    if not any(c.isdigit() for c in rest):
+        return None
+    if not any(c in _CALC_OPS for c in rest):
+        return None
+    return try_calc(rest)
 
 
 def looks_like_fact_question(text: str) -> bool:
@@ -83,7 +128,7 @@ def route(
                 detail="cabinet exact",
             )
 
-    calc = try_calc(raw)
+    calc = try_calc_query(raw)
     if calc is not None:
         return RouteDecision(kind="calc", text=calc, detail="calc")
 

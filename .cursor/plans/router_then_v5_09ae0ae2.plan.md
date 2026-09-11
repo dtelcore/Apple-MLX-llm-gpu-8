@@ -16,7 +16,7 @@ todos:
     status: completed
   - id: train-v5
     content: Train chat_facts_v5 from scratch on 479×20; keep v4; probe France/H/calc/unobtanium
-    status: in_progress
+    status: completed
 isProject: false
 ---
 
