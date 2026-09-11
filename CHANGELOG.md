@@ -7,7 +7,10 @@ Python **router** around one chat checkpoint: cabinet lookup, then calc, then Wi
 - `interactive.py` defaults `--router` on for chat checkpoints (`--no-router` for story).
   Hits feed the stored `User: … Assistant:` prompt into generate (temp 0.2). `2+2` is
   AST+Decimal (`tools/calc.py`, no `eval`). Unknown `What is …` questions use
-  Wikipedia via stdlib urllib (`tools/wiki_search.py`). Network/empty extract falls
+  Wikipedia via stdlib urllib (`tools/wiki_search.py`). Search uses the stripped topic
+  (`tell me about ford` → `ford`), not the wrapper phrase. A Wikipedia hit is appended
+  to `output/cabinet_learned.jsonl` and replayed on later exact/topic hits (weights
+  unchanged). Miss hints and calc are not stored. Network/empty extract falls
   through to a polite miss; snippets are not fed back into the GPT.
 - Exact normalized cabinet index: [`training/cabinet_index.py`](training/cabinet_index.py).
   No fuzzy match (unobtanium must not hit layer-streaming). Cabinet wins over calc

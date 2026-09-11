@@ -26,8 +26,10 @@ python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
 Chat checkpoints default to a **Python router**: exact cabinet hit → generate the
 stored `User: … Assistant:` line; `2+2` → Decimal calc; unknown `What is …` →
 Wikipedia summary; otherwise a miss plus a hint to a **separate** story REPL
-(`--no-router`). Never load two checkpoints in one process. `--no-search` skips
-the network. Do not `combine` `data/*.txt`.
+(`--no-router`). Wikipedia hits are appended to `output/cabinet_learned.jsonl`
+and replayed later; they are not trained into the checkpoint. Never load two
+checkpoints in one process. `--no-search` skips the network. Do not `combine`
+`data/*.txt`.
 
 Stable English recipe on this Air: `setup/story_c256_l6_config.json`
 (C=256, L=6, T=256, batch 4, accum 4, GPT-2 residual scale). Smaller smoke:

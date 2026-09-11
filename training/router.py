@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from tools.calc import try_calc
-from training.cabinet_index import CabinetFact, CabinetIndex
+from training.cabinet_index import CabinetFact, CabinetIndex, remember
 from training.chat_format import is_chat_model_name
 
 SearchFn = Callable[[str], Optional[str]]
@@ -101,12 +101,44 @@ def try_calc_query(text: str) -> Optional[str]:
 
 
 def looks_like_fact_question(text: str) -> bool:
-    s = " ".join((text or "").split()).casefold()
-    if s.startswith("user:"):
-        s = s.split(":", 1)[1].strip()
+    s = _bare_query(text).casefold()
     if not s:
         return False
     return any(s.startswith(p) for p in _FACT_PREFIXES)
+
+
+def search_topic(text: str) -> str:
+    """Noun/topic for Wikipedia: drop 'what is' / 'tell me about' / 'a' / '?'."""
+    s = _bare_query(text)
+    if s.endswith("?"):
+        s = s[:-1].rstrip()
+        s = " ".join(s.split())
+    low = s.casefold()
+    for prefix in sorted(_FACT_PREFIXES, key=len, reverse=True):
+        if low.startswith(prefix):
+            s = s[len(prefix):].strip(" :?")
+            s = " ".join(s.split())
+            break
+    parts = s.split()
+    if parts and parts[0].casefold() in ("a", "an", "the"):
+        s = " ".join(parts[1:])
+    return s
+
+
+def remember_search_hit(
+    index: Optional[CabinetIndex],
+    path,
+    typed: str,
+    extract: str,
+) -> Optional[CabinetFact]:
+    """Persist a Wikipedia extract under the typed question and its search topic."""
+    if index is None or not extract:
+        return None
+    fact = remember(index, path, typed, extract)
+    topic = search_topic(typed)
+    if topic:
+        remember(index, path, topic, extract)
+    return fact
 
 
 def route(
@@ -120,12 +152,17 @@ def route(
     raw = text or ""
     if index is not None:
         fact = index.lookup(raw)
+        if fact is None:
+            topic = search_topic(raw)
+            if topic:
+                fact = index.lookup(topic)
         if fact is not None:
+            learned = fact.source == "learned"
             return RouteDecision(
                 kind="cabinet",
-                text=fact.generate_prompt,
+                text=fact.assistant if learned else fact.generate_prompt,
                 fact=fact,
-                detail="cabinet exact",
+                detail="cabinet learned" if learned else "cabinet exact",
             )
 
     calc = try_calc_query(raw)
@@ -133,8 +170,9 @@ def route(
         return RouteDecision(kind="calc", text=calc, detail="calc")
 
     if search_enabled and looks_like_fact_question(raw):
+        topic = search_topic(raw)
         fn = search_fn
-        extract = fn(raw) if fn is not None else None
+        extract = fn(topic) if fn is not None and topic else None
         if extract:
             return RouteDecision(kind="search", text=extract, detail="wikipedia")
         return RouteDecision(kind="miss", text=MISS_HINT, detail="search_failed")

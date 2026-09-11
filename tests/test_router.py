@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,7 +12,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from training.cabinet_index import CabinetIndex
-from training.router import MISS_HINT, looks_like_fact_question, route
+from training.router import MISS_HINT, looks_like_fact_question, remember_search_hit, route
 
 
 class RouterTests(unittest.TestCase):
@@ -45,6 +46,28 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(d.kind, "calc")
         self.assertEqual(d.text, "2")
 
+    def test_search_uses_stripped_topic_not_full_prompt(self):
+        seen = []
+
+        def capture(q):
+            seen.append(q)
+            return "Ford Motor Company is an American automaker."
+
+        d = route("tell me about ford", self.index, search_fn=capture)
+        self.assertEqual(seen, ["ford"])
+        self.assertEqual(d.kind, "search")
+
+        seen.clear()
+        d = route("what is a ford ?", self.index, search_fn=capture)
+        self.assertEqual(seen, ["ford"])
+        self.assertEqual(d.kind, "search")
+
+    def test_search_topic_strips_wrappers(self):
+        from training.router import search_topic
+        self.assertEqual(search_topic("tell me about ford"), "ford")
+        self.assertEqual(search_topic("what is a ford ?"), "ford")
+        self.assertEqual(search_topic("What is unobtanium"), "unobtanium")
+
     def test_unobtanium_search_success(self):
         d = route(
             "What is unobtanium",
@@ -69,8 +92,27 @@ class RouterTests(unittest.TestCase):
         d = route("What is unobtanium", self.index, search_enabled=False)
         self.assertEqual(d.kind, "miss")
 
+    def test_learned_hit_replays_extract_not_generate_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "learned.jsonl"
+            remember_search_hit(
+                self.index,
+                path,
+                "tell me about ford",
+                "Ford Motor Company is an American automaker.",
+            )
+            d = route("tell me about ford", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
+            self.assertEqual(d.kind, "cabinet")
+            self.assertEqual(d.detail, "cabinet learned")
+            self.assertEqual(d.text, "Ford Motor Company is an American automaker.")
+
+            d2 = route("what is a ford ?", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
+            self.assertEqual(d2.kind, "cabinet")
+            self.assertEqual(d2.detail, "cabinet learned")
+
     def test_looks_like_fact_question(self):
         self.assertTrue(looks_like_fact_question("What is unobtanium"))
+        self.assertTrue(looks_like_fact_question("what is a ford ?"))
         self.assertTrue(looks_like_fact_question("User: Tell me about widget"))
         self.assertFalse(looks_like_fact_question("2+2"))
         self.assertFalse(looks_like_fact_question("once upon a time"))

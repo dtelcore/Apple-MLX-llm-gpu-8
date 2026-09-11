@@ -15,7 +15,9 @@ if str(_ROOT) not in sys.path:
 from training.cabinet_index import (
     CabinetIndex,
     load_cabinet,
+    merge_cabinet,
     normalize_question,
+    remember,
 )
 from training.chat_format import USER_PREFIX
 
@@ -116,6 +118,49 @@ class CabinetIndexTests(unittest.TestCase):
             loaded = load_cabinet(path)
             self.assertEqual(len(loaded), 1)
             self.assertIsNotNone(loaded.lookup("What is the capital of France?"))
+            self.assertEqual(loaded.lookup("What is the capital of France?").source, "trained")
+
+    def test_remember_appends_jsonl_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "learned.jsonl"
+            idx = CabinetIndex()
+            first = remember(idx, path, "tell me about ford", "Ford Motor Company.")
+            second = remember(idx, path, "Tell me about Ford", "Ford Motor Company.")
+            self.assertIsNotNone(first)
+            self.assertEqual(first.source, "learned")
+            self.assertEqual(second, first)
+            lines = path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(lines), 1)
+            rec = json.loads(lines[0])
+            self.assertEqual(rec["query"]["user"], "tell me about ford")
+            self.assertEqual(rec["response"]["assistant"], "Ford Motor Company.")
+
+    def test_remember_does_not_overwrite_trained_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "learned.jsonl"
+            idx = CabinetIndex()
+            idx.add("What is the capital of France?", "The capital of France is Paris.")
+            out = remember(idx, path, "what is the capital of france", "Paris is a city in Texas.")
+            self.assertEqual(out.assistant, "The capital of France is Paris.")
+            self.assertFalse(path.exists())
+
+    def test_merge_learned_skips_trained_conflicts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trained = Path(tmp) / "trained.jsonl"
+            learned = Path(tmp) / "learned.jsonl"
+            _write_jsonl(trained, [("What is the capital of France?", "The capital of France is Paris.")])
+            _write_jsonl(
+                learned,
+                [
+                    ("What is the capital of France?", "Paris, Texas."),
+                    ("tell me about ford", "Ford Motor Company."),
+                ],
+            )
+            idx = load_cabinet(trained)
+            added = merge_cabinet(idx, learned, source="learned")
+            self.assertEqual(added, 1)
+            self.assertEqual(idx.lookup("What is the capital of France?").assistant, "The capital of France is Paris.")
+            self.assertEqual(idx.lookup("tell me about ford").source, "learned")
 
 
 class LiveMixTests(unittest.TestCase):

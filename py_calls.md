@@ -320,7 +320,7 @@ python generate.py --checkpoint output\checkpoints\BiggerTest256256 --cuda-graph
 
 REPL; session commands: `:temp`, `:tokens`, `:topk`, `:topp`, `:trace on|off`, `:quit`. Chat mode adds `:clear`, `:system`. Router adds `:search`, `:calc`, `:route`.
 
-Chat checkpoints default **`--router`**: cabinet exact hit → generate stored `User: … Assistant:` (temp 0.2); else calc; else Wikipedia; else miss. Story checkpoints default generate-every-turn. One checkpoint only (2 GB). `--no-search` skips the network.
+Chat checkpoints default **`--router`**: cabinet exact hit → generate stored `User: … Assistant:` (temp 0.2); else calc; else Wikipedia; else miss. Wikipedia hits append to `output/cabinet_learned.jsonl` and replay verbatim next time (not trained into the net). Story checkpoints default generate-every-turn. One checkpoint only (2 GB). `--no-search` skips the network.
 
 ```text
 python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
@@ -341,6 +341,7 @@ python interactive.py --checkpoint output/checkpoints/<story> --no-router
 | `--top-p` | float | `None` (chat: **0.9**) |
 | `--router` / `--no-router` | flags | chat name → on; story → off |
 | `--facts` | str | `data/chat_facts.jsonl` |
+| `--learned` | str | `output/cabinet_learned.jsonl` |
 | `--no-search` | flag | off |
 | `--no-kv-cache` / `--cuda-graph` | flags | KV on; graph off |
 

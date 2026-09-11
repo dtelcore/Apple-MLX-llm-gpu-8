@@ -25,6 +25,7 @@ class CabinetFact:
     assistant: str
     generate_prompt: str
     key: str
+    source: str = "trained"
 
 
 def normalize_question(text: str) -> str:
@@ -108,7 +109,7 @@ class CabinetIndex:
             return None
         return self._facts.get(key)
 
-    def add(self, user: str, assistant: str) -> Optional[CabinetFact]:
+    def add(self, user: str, assistant: str, *, source: str = "trained") -> Optional[CabinetFact]:
         key = normalize_question(user)
         if not key:
             return None
@@ -122,18 +123,71 @@ class CabinetIndex:
             assistant=assistant.strip(),
             generate_prompt=generate_prompt_for(user.strip()),
             key=key,
+            source=source,
         )
         self._facts[key] = fact
         return fact
 
 
-def load_cabinet(path: Union[str, Path]) -> CabinetIndex:
+def _pairs_from_path(path: Path) -> Iterator[tuple]:
+    if path.suffix.lower() == ".jsonl":
+        return _pairs_from_jsonl(path)
+    return _pairs_from_txt(path)
+
+
+def _jsonl_line(user: str, assistant: str) -> str:
+    return json.dumps(
+        {"query": {"user": user}, "response": {"assistant": assistant}},
+        ensure_ascii=False,
+    )
+
+
+def load_cabinet(path: Union[str, Path], *, source: str = "trained") -> CabinetIndex:
     """Load unique facts from JSONL (or native ``User:/Assistant:`` txt)."""
     src = Path(path)
     index = CabinetIndex()
     if not src.is_file():
         raise FileNotFoundError(f"Cabinet facts not found: {src}")
-    pairs = _pairs_from_jsonl(src) if src.suffix.lower() == ".jsonl" else _pairs_from_txt(src)
-    for user, assistant in pairs:
-        index.add(user, assistant)
+    for user, assistant in _pairs_from_path(src):
+        index.add(user, assistant, source=source)
     return index
+
+
+def merge_cabinet(
+    index: CabinetIndex,
+    path: Union[str, Path],
+    *,
+    source: str = "learned",
+) -> int:
+    """Load extra facts into an existing index. Returns how many keys were new."""
+    src = Path(path)
+    if not src.is_file():
+        return 0
+    before = len(index)
+    for user, assistant in _pairs_from_path(src):
+        index.add(user, assistant, source=source)
+    return len(index) - before
+
+
+def remember(
+    index: CabinetIndex,
+    path: Union[str, Path],
+    user: str,
+    assistant: str,
+    *,
+    source: str = "learned",
+) -> Optional[CabinetFact]:
+    """Index a new Q&A and append JSONL. Duplicates and conflicts do not write."""
+    if not (user or "").strip() or not (assistant or "").strip():
+        return None
+    existing = index.lookup(user)
+    if existing is not None:
+        return existing
+    fact = index.add(user, assistant, source=source)
+    if fact is None:
+        return None
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(_jsonl_line(fact.user, fact.assistant) + "\n")
+    return fact

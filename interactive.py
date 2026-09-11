@@ -20,7 +20,7 @@ Session commands:
     :topp <n>|none      set top-p
     :clear              reset chat history (chat mode)
     :system <text>      set / replace the system prefix (chat mode)
-    :search <q>         Wikipedia summary (router)
+    :search <q>         Wikipedia summary (router; saved to learned JSONL)
     :calc <expr>        safe Decimal arithmetic (router)
     :route              print last router decision
     :trace on|off       toggle all tracing for subsequent turns
@@ -37,10 +37,18 @@ import numpy as np
 import cli_common
 from logging_config import logger, setup_generate_run_logging
 from model.gpt import GPTModel
-from paths import DATA_DIR, ensure_output_dirs
-from training.router import MISS_HINT, RouteDecision, route, router_enabled, try_calc_query
+from paths import DATA_DIR, OUTPUT_ROOT, ensure_output_dirs
+from training.router import (
+    MISS_HINT,
+    RouteDecision,
+    remember_search_hit,
+    route,
+    router_enabled,
+    search_topic,
+    try_calc_query,
+)
 from tools.wiki_search import wiki_summary
-from training.cabinet_index import CabinetIndex, load_cabinet
+from training.cabinet_index import CabinetIndex, load_cabinet, merge_cabinet
 from training.checkpoint import load_checkpoint
 from training.chat_format import (
     ASSISTANT_ROLE,
@@ -58,6 +66,7 @@ from training.chat_format import (
 CABINET_GENERATE_TEMP = 0.2
 CABINET_GENERATE_TOP_K = 10
 DEFAULT_FACTS = DATA_DIR / "chat_facts.jsonl"
+DEFAULT_LEARNED = OUTPUT_ROOT / "cabinet_learned.jsonl"
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +104,10 @@ def parse_args() -> argparse.Namespace:
         help="Cabinet JSONL/txt for --router (default: data/chat_facts.jsonl)",
     )
     parser.add_argument(
+        "--learned", type=str, default=str(DEFAULT_LEARNED),
+        help="JSONL overlay for Wikipedia hits (default: output/cabinet_learned.jsonl)",
+    )
+    parser.add_argument(
         "--no-search", action="store_true",
         help="With --router, skip Wikipedia (fact-shaped misses go to the polite hint)",
     )
@@ -111,18 +124,24 @@ def _resolve_chat_mode(args: argparse.Namespace, model_name: str) -> bool:
     return is_chat_model_name(model_name)
 
 
-def _load_index(facts_path: str) -> Optional[CabinetIndex]:
+def _load_index(facts_path: str, learned_path: str) -> CabinetIndex:
+    index = CabinetIndex()
+    src = facts_path
     try:
         index = load_cabinet(facts_path)
     except FileNotFoundError:
-        logger.warning("cabinet facts missing at %s; router will skip cabinet hits", facts_path)
-        print(f"[router] facts not found: {facts_path} (cabinet lookup disabled)")
-        return None
+        logger.warning("cabinet facts missing at %s; starting empty trained index", facts_path)
+        print(f"[router] facts not found: {facts_path} (trained cabinet empty)")
+        src = facts_path
     except (OSError, ValueError) as exc:
         logger.warning("cabinet facts failed to load from %s: %s", facts_path, exc)
         print(f"[router] could not load facts: {exc}")
-        return None
-    print(f"[router] cabinet index: {len(index)} unique facts from {facts_path}")
+    n_trained = len(index)
+    n_learned = merge_cabinet(index, learned_path, source="learned")
+    print(
+        f"[router] cabinet index: {len(index)} unique "
+        f"({n_trained} trained from {src}, {n_learned} learned from {learned_path})"
+    )
     return index
 
 
@@ -148,9 +167,10 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
     chat_mode = _resolve_chat_mode(args, model_name)
     router_on = router_enabled(getattr(args, "router", None), model_name)
     search_enabled = router_on and not bool(getattr(args, "no_search", False))
+    learned_path = str(getattr(args, "learned", DEFAULT_LEARNED))
     cabinet: Optional[CabinetIndex] = None
     if router_on:
-        cabinet = _load_index(str(getattr(args, "facts", DEFAULT_FACTS)))
+        cabinet = _load_index(str(getattr(args, "facts", DEFAULT_FACTS)), learned_path)
 
     if chat_mode:
         temperature = args.temperature if args.temperature is not None else DEFAULT_CHAT_TEMPERATURE
@@ -199,6 +219,18 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
         logger.info("prompt=%r generated_text:\n%s", prompt_text, full_text)
         return reply if chat_mode else full_text
 
+    def _save_search(typed: str, extract: str) -> None:
+        if cabinet is None or not extract:
+            return
+        before = len(cabinet)
+        fact = remember_search_hit(cabinet, learned_path, typed, extract)
+        if fact is None:
+            return
+        added = len(cabinet) - before
+        if added:
+            logger.info("cabinet learned +%s user=%r path=%s", added, typed, learned_path)
+            print(f"[cabinet] saved {added} → {learned_path}")
+
     def _emit_user_reply(user_text: str, reply: str) -> None:
         print(reply)
         if chat_mode:
@@ -223,6 +255,7 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
         cmds = ":search Q  :calc EXPR  :route  " + cmds
         search_note = "on" if search_enabled else "off"
         print(f"Router: cabinet → calc → Wikipedia({search_note}) → miss  (one checkpoint)")
+        print(f"Learned KB: Wikipedia hits append to {learned_path} (replayed, not trained)")
     print(f"Type a prompt and press Enter. Commands: {cmds}")
     print("=" * 70)
 
@@ -275,10 +308,12 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
                 print(f"[route] kind={last_route.kind} detail={last_route.detail}")
             continue
         if router_on and prompt.startswith(":search"):
-            query = prompt[len(":search"):].strip()
+            raw_q = prompt[len(":search"):].strip()
+            query = search_topic(raw_q) or raw_q
             extract = wiki_summary(query) if search_enabled and query else None
             if extract:
                 last_route = RouteDecision(kind="search", text=extract, detail="wikipedia_forced")
+                _save_search(raw_q or query, extract)
                 _emit_user_reply(query or prompt, extract)
             else:
                 last_route = RouteDecision(kind="miss", text=MISS_HINT, detail="search_failed")
@@ -305,6 +340,9 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
             last_route = decision
             logger.info("route kind=%s detail=%s prompt=%r", decision.kind, decision.detail, prompt)
             if decision.kind == "cabinet" and decision.fact is not None:
+                if decision.fact.source == "learned":
+                    _emit_user_reply(prompt, decision.fact.assistant)
+                    continue
                 prompt_text = decision.fact.generate_prompt
                 prompt_ids = tokenizer.encode(prompt_text)
                 if not prompt_ids:
@@ -319,7 +357,11 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
                 )
                 _emit_user_reply(prompt, reply)
                 continue
-            if decision.kind in ("calc", "search", "miss"):
+            if decision.kind == "search":
+                _save_search(prompt, decision.text)
+                _emit_user_reply(prompt, decision.text)
+                continue
+            if decision.kind in ("calc", "miss"):
                 _emit_user_reply(prompt, decision.text)
                 continue
 
