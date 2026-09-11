@@ -15,6 +15,7 @@ from tools.make_fact_mix import load_user_facts
 from tools.wikidata_to_facts import (
     apply_limit,
     collect_facts,
+    drop_conflicts,
     usable_label,
     verbalize,
     write_facts,
@@ -41,6 +42,8 @@ class WikidataFactsTests(unittest.TestCase):
 
     def test_drops_qid_and_url_labels(self):
         self.assertFalse(usable_label("Q42"))
+        self.assertTrue(usable_label("C"))
+        self.assertTrue(usable_label("e"))
         self.assertIsNone(
             verbalize(_bind(countryLabel="Q123", capitalLabel="Paris"), "capitals"),
         )
@@ -76,6 +79,29 @@ class WikidataFactsTests(unittest.TestCase):
         pairs = collect_facts(["capitals"], query_fn=fake_query, sleep_s=0)
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs[0][0], "What is the capital of France?")
+
+    def test_collect_drops_conflicting_answers(self):
+        rows = [
+            _bind(countryLabel="Kashmir", capitalLabel="Srinagar"),
+            _bind(countryLabel="Kashmir", capitalLabel="Jammu"),
+            _bind(countryLabel="France", capitalLabel="Paris"),
+        ]
+
+        def fake_query(_query: str):
+            return list(rows)
+
+        pairs = collect_facts(["capitals"], query_fn=fake_query, sleep_s=0)
+        users = [p[0] for p in pairs]
+        self.assertEqual(users, ["What is the capital of France?"])
+        self.assertEqual(
+            drop_conflicts(
+                [
+                    ("What is the capital of Kashmir?", "Srinagar"),
+                    ("What is the capital of Kashmir?", "Jammu"),
+                ]
+            ),
+            [],
+        )
 
     def test_write_is_native_and_fact_mix_loads_it(self):
         pairs = [

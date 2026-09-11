@@ -16,6 +16,7 @@ python -m tests.parity.run_parity
 python auto_train.py --config setup/story_c256_l6_config.json --steps 20 --no-prompt
 python generate_config.py          # write a setup/*.json recipe (C/H/L/T/B)
 python tools/wikidata_to_facts.py  # optional: SPARQL → data/facts/wikidata_facts.txt
+python tools/wikidata_to_facts2.py # optional: tech/health/maths → data/facts/*_facts.txt
 python tools/make_fact_mix.py      # repeat facts → data/chat_facts.jsonl
 python auto_train.py --config setup/chat_facts_config.json --checkpoint output/checkpoints/chat_facts_v2 --steps 300 --no-prompt
 ```

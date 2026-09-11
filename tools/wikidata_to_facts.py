@@ -7,7 +7,7 @@ for make_fact_mix.py (loaded from data/facts/*.txt).
 
 Does not concatenate data/train.txt or chat_train.txt. Keep LIMIT modest:
 this cabinet memorizes tens-to-hundreds of repeated facts, not thousands of
-thin ones.
+thin ones. Same User: line with two different answers is dropped entirely.
 
 Network: SPARQLWrapper if installed, else stdlib urllib. Be polite (--sleep).
 Optional: `pip install SPARQLWrapper` (pulls rdflib). Not required.
@@ -92,16 +92,20 @@ def apply_limit(query: str, limit: Optional[int]) -> str:
     return query.rstrip() + f"\nLIMIT {n}\n"
 
 
-def _cell(row: dict, key: str) -> str:
+def cell_value(row: dict, key: str) -> str:
     cell = row.get(key) or {}
     if not isinstance(cell, dict):
         return ""
     return str(cell.get("value") or "").strip()
 
 
+def _cell(row: dict, key: str) -> str:
+    return cell_value(row, key)
+
+
 def usable_label(text: str) -> bool:
     value = " ".join((text or "").split())
-    if len(value) < 2:
+    if len(value) < 1:
         return False
     if _QID.match(value):
         return False
@@ -167,6 +171,30 @@ def dedupe_pairs(pairs: Iterable[Pair]) -> List[Pair]:
     return out
 
 
+def drop_conflicts(pairs: Iterable[Pair]) -> List[Pair]:
+    """Drop any User: question that has two or more distinct answers.
+
+    Same question with different answers, then repeated N×, skews the fact
+    mix (e.g. multi-capital regions). Do not pick a winner — drop entirely.
+    """
+    by_user: Dict[str, List[Pair]] = {}
+    order: List[str] = []
+    for user, assistant in pairs:
+        key = " ".join((user or "").split()).lower()
+        if key not in by_user:
+            order.append(key)
+            by_user[key] = []
+        by_user[key].append((user, assistant))
+    out: List[Pair] = []
+    for key in order:
+        group = by_user[key]
+        answers = {" ".join((assistant or "").split()).lower() for _, assistant in group}
+        if len(answers) != 1:
+            continue
+        out.append(group[0])
+    return out
+
+
 def run_query_urllib(query: str, *, timeout: float = 60.0) -> List[dict]:
     body = urllib.parse.urlencode({"query": query, "format": "json"}).encode("utf-8")
     req = urllib.request.Request(
@@ -220,7 +248,7 @@ def collect_facts(
                 pairs.append(pair)
         if i + 1 < len(kinds) and sleep_s > 0:
             time.sleep(sleep_s)
-    return dedupe_pairs(pairs)
+    return drop_conflicts(dedupe_pairs(pairs))
 
 
 def write_facts(pairs: Sequence[Pair], path: Path) -> int:
