@@ -359,6 +359,24 @@ python interactive.py --checkpoint output/checkpoints/<story> --no-router
 | `--no-search` | flag | off |
 | `--no-kv-cache` / `--cuda-graph` | flags | KV on; graph off |
 
+### `webui.py`
+
+Flask chat UI on the same `ChatSession` as `interactive.py` (one checkpoint, 2 GB).
+Quit the REPL first. Default http://127.0.0.1:7860
+
+```text
+python webui.py --checkpoint output/checkpoints/chat_facts_v5 --chat
+python webui.py --checkpoint output/checkpoints/chat_facts_v6 --chat --facts data/chat_facts_v6.jsonl
+```
+
+| Flag | Type | Default |
+|------|------|---------|
+| *(same session flags as interactive.py)* | | |
+| `--host` | str | `127.0.0.1` |
+| `--port` | int | `7860` |
+
+JSON: `POST /api/chat` `{"message":"…"}`. Optional OpenAI-shaped `POST /v1/chat/completions`.
+
 ---
 
 ### `setup/training_setup.py`

@@ -1,0 +1,129 @@
+"""ChatSession router turns without loading a checkpoint."""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from argparse import Namespace
+from pathlib import Path
+from types import SimpleNamespace
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from training.cabinet_index import CabinetIndex
+from training.chat_session import ChatSession, TurnResult, add_session_args
+
+
+class FakeTok:
+    def encode(self, text):
+        return [1, 2, 3]
+
+    def decode(self, ids):
+        return "FAKE GENERATE"
+
+
+class FakeModel:
+    def generate(self, *args, **kwargs):
+        raise AssertionError("generate should not run for calc/learned/commands")
+
+
+def _session(**kwargs):
+    defaults = dict(
+        model=FakeModel(),
+        tokenizer=FakeTok(),
+        gpt_config=SimpleNamespace(name="Chat C=512 L=6 T=256", vocab_size=10, max_len=256),
+        args=Namespace(checkpoint="ck"),
+        chat_mode=True,
+        router_on=True,
+        search_enabled=False,
+        learned_path="unused.jsonl",
+        cabinet=CabinetIndex(),
+        temperature=0.7,
+        top_k=32,
+        top_p=0.9,
+        system="sys",
+        stop_strings=["User:"],
+        max_new_tokens=80,
+        tracer=SimpleNamespace(any_enabled=False),
+        rng=None,
+        use_kv_cache=True,
+        use_cuda_graph=False,
+        trace_enabled=False,
+    )
+    defaults.update(kwargs)
+    return ChatSession(**defaults)
+
+
+class ChatSessionTests(unittest.TestCase):
+    def test_calc_does_not_generate(self):
+        s = _session()
+        r = s.turn("2+2")
+        self.assertEqual(r.kind, "calc")
+        self.assertEqual(r.text, "4")
+
+    def test_learned_replay(self):
+        cab = CabinetIndex()
+        cab.add("tell me about python", "Python is a language.", source="learned")
+        s = _session(cabinet=cab)
+        r = s.turn("tell me about python")
+        self.assertEqual(r.kind, "cabinet")
+        self.assertEqual(r.text, "Python is a language.")
+        self.assertEqual(len(s.history), 2)
+
+    def test_clear_command(self):
+        s = _session()
+        s.turn("2+2")
+        r = s.turn(":clear")
+        self.assertEqual(r.kind, "command")
+        self.assertEqual(s.history, [])
+
+    def test_add_session_args_accepts_facts(self):
+        parser = __import__("argparse").ArgumentParser()
+        add_session_args(parser)
+        ns = parser.parse_args(["--checkpoint", "ck", "--no-search"])
+        self.assertTrue(ns.no_search)
+
+
+class WebuiApiTests(unittest.TestCase):
+    def test_chat_and_clear(self):
+        from webui import create_app
+
+        class Fake:
+            def status(self):
+                return {
+                    "checkpoint": "ck",
+                    "model": "Chat C=512 L=6 T=256",
+                    "vocab_size": 10,
+                    "max_len": 256,
+                    "chat": True,
+                    "router": True,
+                    "search": False,
+                    "cabinet": 0,
+                    "system": "sys",
+                    "learned": "l",
+                }
+
+            def turn(self, message):
+                return TurnResult(text="4", kind="calc", detail="calc")
+
+            def clear(self):
+                self.cleared = True
+
+        fake = Fake()
+        app = create_app(fake)
+        client = app.test_client()
+        home = client.get("/")
+        self.assertEqual(home.status_code, 200)
+        self.assertIn(b"Apple MLX", home.data)
+        chat = client.post("/api/chat", json={"message": "2+2"})
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.get_json()["reply"], "4")
+        self.assertEqual(client.post("/api/clear").status_code, 200)
+        empty = client.post("/api/chat", json={"message": "  "})
+        self.assertEqual(empty.status_code, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

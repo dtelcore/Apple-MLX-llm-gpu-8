@@ -12,6 +12,7 @@ Python **router** around one chat checkpoint: cabinet lookup, then calc, then Wi
   to `output/cabinet_learned.jsonl` and replayed on later exact/topic hits (weights
   unchanged). Miss hints and calc are not stored. Network/empty extract falls
   through to a polite miss; snippets are not fed back into the GPT.
+  Flask UI: `webui.py` (same session as `interactive.py`; one process).
 - Exact normalized cabinet index: [`training/cabinet_index.py`](training/cabinet_index.py).
   No fuzzy match (unobtanium must not hit layer-streaming). Cabinet wins over calc
   (`What is 0 factorial?`). One checkpoint only — do not load a story net in the
