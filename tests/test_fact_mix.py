@@ -16,6 +16,7 @@ from setup.config_loader import resolve_dataset_corpus
 from tools.make_fact_mix import (
     _NEONICS_USER,
     build_pairs,
+    load_learned_extras,
     load_user_facts,
     neonics_pair,
     write_outputs,
@@ -84,6 +85,24 @@ class FactMixTests(unittest.TestCase):
             pairs = load_user_facts([path])
             self.assertEqual(len(pairs), 1)
             self.assertEqual(pairs[0][0], "What is the atomic number of Oxygen?")
+
+    def test_load_learned_extras_skips_trained_keys_and_repeats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            learned = Path(tmp) / "learned.jsonl"
+            rows = [
+                {"query": {"user": "Tell me about Neonics."}, "response": {"assistant": "This has led to the recent banning of Neonics in the EU, however the US and Canada are still using this chemical pesticide."}},
+                {"query": {"user": "tell me about python"}, "response": {"assistant": "Python is a programming language."}},
+                {"query": {"user": "tell me about python"}, "response": {"assistant": "Python is a programming language."}},
+                {"query": {"user": "what is a ford"}, "response": {"assistant": "Python may refer to:"}},
+                {"query": {"user": "too long"}, "response": {"assistant": "x" * 600}},
+            ]
+            learned.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+            extras = load_learned_extras(
+                learned,
+                existing=[neonics_pair()],
+                max_assistant_chars=512,
+            )
+            self.assertEqual(extras, [("tell me about python", "Python is a programming language.")])
 
 
 if __name__ == "__main__":

@@ -225,6 +225,8 @@ not `chat_c256_l6_config.json`.
 ```text
 python tools/make_fact_mix.py
 python tools/make_fact_mix.py --user-repeat 300 --wiki-repeat 10 --max-wiki-facts 0
+python tools/make_fact_mix.py --learned output/cabinet_learned.jsonl --user-repeat 20 --max-wiki-facts 0 \
+  --output data/chat_facts_v6.txt --jsonl data/chat_facts_v6.jsonl
 ```
 
 | Flag | Type | Default |
@@ -233,9 +235,21 @@ python tools/make_fact_mix.py --user-repeat 300 --wiki-repeat 10 --max-wiki-fact
 | `--chat-train` | str | `data/chat_train.txt` |
 | `--output` | str | `data/chat_facts.txt` |
 | `--jsonl` | str | `data/chat_facts.jsonl` |
+| `--learned` | str | (off) |
+| `--max-learned-chars` | int | `512` |
 | `--max-wiki-facts` | int | `0` |
 | `--user-repeat` | int | `300` |
 | `--wiki-repeat` | int | `10` |
+
+v6 (cabinet packs + unique learned extras, new BPE, do not `--resume` v5):
+
+```text
+python auto_train.py --config setup/chat_facts_v6_config.json \
+  --checkpoint output/checkpoints/chat_facts_v6 \
+  --steps 1000 --run-budget 16000 --no-prompt --log-every 1 \
+  --prompt "User: What is the capital of France? Assistant:" \
+  --stop "User:"
+```
 
 ### `tools/wikidata_to_facts.py`
 

@@ -26,6 +26,8 @@ if str(ROOT) not in sys.path:
 
 from tools.make_chat_trainset import qa_record, topic_from_fact, wrap_native
 from tools.wikidata_to_facts import drop_conflicts
+from tools.wikidata_to_facts2 import fold_label
+from training.cabinet_index import _pairs_from_jsonl, normalize_question
 from training.chat_format import ASSISTANT_PREFIX, USER_PREFIX
 
 _NEONICS_ASSISTANT = (
@@ -64,6 +66,43 @@ def load_user_facts(paths: Sequence[Path]) -> List[Tuple[str, str]]:
                 if pair:
                     out.append(pair)
     return drop_conflicts(out)
+
+
+DEFAULT_MAX_LEARNED_ASSISTANT_CHARS = 512
+
+
+def load_learned_extras(
+    path: Path,
+    *,
+    existing: Sequence[Tuple[str, str]],
+    max_assistant_chars: int = DEFAULT_MAX_LEARNED_ASSISTANT_CHARS,
+) -> List[Tuple[str, str]]:
+    """Unique learned JSONL pairs not already in the trained cabinet.
+
+    Skips the chat_facts dump if it was concatenated into cabinet_learned.jsonl.
+    Drops disambiguation stubs and answers too long for T=256 recitation.
+    """
+    if not path.is_file():
+        return []
+    have = {normalize_question(user) for user, _asst in existing}
+    have.discard("")
+    seen = set()
+    extras: List[Tuple[str, str]] = []
+    for user, assistant in _pairs_from_jsonl(path):
+        user = fold_label(user)
+        assistant = fold_label(assistant)
+        if not user or not assistant:
+            continue
+        if len(assistant) > int(max_assistant_chars):
+            continue
+        if assistant.casefold().rstrip(" .:").endswith("may refer to"):
+            continue
+        key = normalize_question(user)
+        if not key or key in have or key in seen:
+            continue
+        seen.add(key)
+        extras.append((user, assistant))
+    return drop_conflicts(extras)
 
 
 def load_wiki_core(chat_train: Path, *, max_facts: int) -> List[Tuple[str, str]]:
@@ -138,12 +177,32 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-wiki-facts", type=int, default=0)
     parser.add_argument("--user-repeat", type=int, default=300)
     parser.add_argument("--wiki-repeat", type=int, default=10)
+    parser.add_argument(
+        "--learned",
+        type=str,
+        default="",
+        help="Optional cabinet_learned.jsonl; unique extras only (trained keys win)",
+    )
+    parser.add_argument(
+        "--max-learned-chars",
+        type=int,
+        default=DEFAULT_MAX_LEARNED_ASSISTANT_CHARS,
+        help="Drop learned answers longer than this (T=256 recitation)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     user = load_user_facts([Path(args.user_facts), *(Path(ROOT / "data" / "facts").glob("*.txt") if (ROOT / "data" / "facts").is_dir() else [])])
+    learned: List[Tuple[str, str]] = []
+    if str(args.learned).strip():
+        learned = load_learned_extras(
+            Path(args.learned),
+            existing=user,
+            max_assistant_chars=int(args.max_learned_chars),
+        )
+        user = list(user) + learned
     wiki = load_wiki_core(Path(args.chat_train), max_facts=int(args.max_wiki_facts))
     pairs = build_pairs(
         user_facts=user,
@@ -154,8 +213,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     n = write_outputs(pairs, Path(args.output), Path(args.jsonl))
     print(
         f"Wrote {n:,} documents to {args.output} "
-        f"(user_facts={len(user)} wiki_core={len(wiki)} "
-        f"user_repeat={args.user_repeat} wiki_repeat={args.wiki_repeat})"
+        f"(user_facts={len(user) - len(learned)} learned_extra={len(learned)} "
+        f"wiki_core={len(wiki)} user_repeat={args.user_repeat} wiki_repeat={args.wiki_repeat})"
     )
     return 0
 

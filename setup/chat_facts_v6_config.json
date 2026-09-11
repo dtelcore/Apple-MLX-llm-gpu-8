@@ -1,11 +1,11 @@
 {
   "model": {
-    "name": "Chat C=512 L=16 T=512",
+    "name": "Chat C=512 L=6 T=256",
     "vocab_size": null,
-    "max_len": 512,
+    "max_len": 256,
     "embedding_dim": 512,
     "num_heads": 8,
-    "num_layers": 16,
+    "num_layers": 6,
     "dropout_prob": 0.1,
     "tie_embeddings": true,
     "norm_type": "rmsnorm",
@@ -13,11 +13,11 @@
     "init_scale": 0.02,
     "residual_scale": true,
     "layer_strategy": "stream",
-    "description": "Phase 1 chat cabinet. C=512 L=6 T=256. Trains only data/chat_facts.jsonl. 2 GB cap is hardcoded."
+    "description": "v6 chat cabinet: unique chat_facts packs plus unique learned extras. Trains only data/chat_facts_v6.jsonl. Keep v4 and v5. 2 GB cap is hardcoded."
   },
   "dataset": {
-    "name": "chat_facts",
-    "path": "data/chat_facts.jsonl",
+    "name": "chat_facts_v6",
+    "path": "data/chat_facts_v6.jsonl",
     "combine": false,
     "tokenizer": "bpe",
     "bpe_merges": 4000,
@@ -25,8 +25,8 @@
   },
   "weight_initialization": {},
   "hyperparameters": {
-    "name": "Chat C=512 L=16 T=512",
-    "learning_rate": 0.00015,
+    "name": "Chat C=512 L=6 T=256",
+    "learning_rate": 0.0005,
     "weight_decay": 0.01,
     "batch_size": 8,
     "num_epochs": 1,
@@ -41,7 +41,7 @@
     "epsilon": 1e-08
   },
   "metadata": {
-    "created": "chat-facts-phase1",
-    "description": "From-scratch phase 1 on data/chat_facts.jsonl only. Do not --resume old chat/story checkpoints. Do not combine data/."
+    "created": "chat-facts-v6-learned",
+    "description": "From-scratch on data/chat_facts_v6.jsonl only. Do not --resume v4 or v5. Do not combine data/."
   }
 }

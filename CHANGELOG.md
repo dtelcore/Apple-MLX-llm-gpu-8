@@ -18,6 +18,9 @@ Python **router** around one chat checkpoint: cabinet lookup, then calc, then Wi
   same process (2 GB cap).
 - Do not `combine: true`. Do not `--resume` v4 into a new mix. Keep
   `output/checkpoints/chat_facts_v4` as the 105×300 recitation baseline.
+  Optional v6: unique learned extras folded into `data/chat_facts_v6.jsonl`
+  (`tools/make_fact_mix.py --learned`), train `setup/chat_facts_v6_config.json`
+  from scratch (new BPE). Do not `--resume` v5.
 
 ## 0.0.6
 
