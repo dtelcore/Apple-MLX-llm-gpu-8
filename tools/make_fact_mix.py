@@ -9,6 +9,7 @@ Writes:
 
 Also loads data/user_facts.txt and data/facts/*.txt (e.g. Wikidata export).
 Does not concatenate data/train.txt or the full chat_train dump.
+Same User: question with two different answers is dropped entirely.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.make_chat_trainset import qa_record, topic_from_fact, wrap_native
+from tools.wikidata_to_facts import drop_conflicts
 from training.chat_format import ASSISTANT_PREFIX, USER_PREFIX
 
 _NEONICS_ASSISTANT = (
@@ -61,7 +63,7 @@ def load_user_facts(paths: Sequence[Path]) -> List[Tuple[str, str]]:
                 pair = _split_native(stripped)
                 if pair:
                     out.append(pair)
-    return out
+    return drop_conflicts(out)
 
 
 def load_wiki_core(chat_train: Path, *, max_facts: int) -> List[Tuple[str, str]]:

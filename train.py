@@ -58,6 +58,7 @@ from tokenizer.factory import (
     build_tokenizer,
     tokenizer_kind_from_config,
 )
+from training.chat_format import DEFAULT_CHAT_PROMPT, is_chat_model_name
 from training.checkpoint import promote_best, save_checkpoint
 from training.dataset import WindowedDataset
 from training.token_cache import fingerprint as token_cache_fingerprint
@@ -997,10 +998,20 @@ def train(args: argparse.Namespace) -> str:
     temp = getattr(args, "temperature", DEFAULT_GENERATE_PROBE_TEMPERATURE)
     top_k = getattr(args, "top_k", DEFAULT_GENERATE_PROBE_TOP_K)
     top_p = getattr(args, "top_p", DEFAULT_GENERATE_PROBE_TOP_P)
-    print(
-        f"  python generate.py --checkpoint {run_dir} --prompt \"once upon a\" "
-        f"--max-new-tokens 256 --temperature {temp} --top-k {top_k} --top-p {top_p}"
-    )
+    smoke = getattr(args, "prompt", None) or ""
+    if is_chat_model_name(getattr(gpt_config, "name", "")):
+        if not str(smoke).startswith("User:"):
+            smoke = DEFAULT_CHAT_PROMPT
+        print(
+            f"  python generate.py --checkpoint {run_dir} "
+            f"--prompt {json.dumps(smoke)} --stop User: --max-new-tokens 80 "
+            f"--temperature 0.2"
+        )
+    else:
+        print(
+            f"  python generate.py --checkpoint {run_dir} --prompt \"once upon a\" "
+            f"--max-new-tokens 256 --temperature {temp} --top-k {top_k} --top-p {top_p}"
+        )
     print(f"  python train.py --generate --models-dir {resolve_checkpoints_dir(args.models_dir)}")
     print(f"  python train.py --compare-quarters --checkpoint {run_dir}")
 

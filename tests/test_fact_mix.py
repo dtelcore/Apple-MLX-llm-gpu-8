@@ -72,6 +72,19 @@ class FactMixTests(unittest.TestCase):
             )
             self.assertEqual(alias, corpus)
 
+    def test_load_drops_conflicting_user_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "user_facts.txt"
+            path.write_text(
+                "User: What is the capital of Kashmir? Assistant: Srinagar.\n"
+                "User: What is the capital of Kashmir? Assistant: Jammu.\n"
+                "User: What is the atomic number of Oxygen? Assistant: The atomic number of Oxygen is 8.\n",
+                encoding="utf-8",
+            )
+            pairs = load_user_facts([path])
+            self.assertEqual(len(pairs), 1)
+            self.assertEqual(pairs[0][0], "What is the atomic number of Oxygen?")
+
 
 if __name__ == "__main__":
     unittest.main()
