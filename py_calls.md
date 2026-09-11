@@ -240,7 +240,8 @@ python tools/make_fact_mix.py --user-repeat 300 --wiki-repeat 10 --max-wiki-fact
 ### `tools/wikidata_to_facts.py`
 
 SPARQL groups → native chat lines under `data/facts/` (picked up by make_fact_mix).
-Keeps LIMIT modest. Drops Q-id labels. Uses stdlib urllib; `SPARQLWrapper` if installed.
+Keeps LIMIT modest. Drops Q-id labels and same-question conflicts. Uses stdlib
+urllib; `SPARQLWrapper` if installed.
 
 ```text
 python tools/wikidata_to_facts.py
@@ -252,6 +253,33 @@ python tools/wikidata_to_facts.py --output data/facts/my_wikidata.txt
 |------|------|---------|-------|
 | `--queries` | str+ | `capitals elements` | `capitals`, `inventors`, `birth_years`, `elements` |
 | `--output` | str | `data/facts/wikidata_facts.txt` | |
+| `--sleep` | float | `1.0` | Pause between groups |
+| `--limit` | int | query default | Override SPARQL LIMIT |
+
+### `tools/wikidata_to_facts2.py`
+
+Second SPARQL pack (`wikidatafetch2`): technology, health, and maths into
+**separate** files under `data/facts/` (`tech_facts.txt`, `health_facts.txt`,
+`maths_facts.txt`). Distinct question templates per kind. Drops any User: line
+that has two different answers. Health lines are encyclopedic only (vitamins,
+organs, pathogens, amino acids — no dosing or treatment advice). Modest LIMITs.
+Same network stack as the first tool.
+
+```text
+python tools/wikidata_to_facts2.py
+python tools/wikidata_to_facts2.py --domains technology maths --limit 25
+python tools/wikidata_to_facts2.py --output-dir data/facts --sleep 1
+python tools/wikidata_to_facts2.py --queries lang_designers si_units --tech-output data/facts/tech_facts.txt
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--domains` | str+ | `technology health maths` | Which packs to write |
+| `--queries` | str+ | all kinds in those domains | Optional SPARQL subset |
+| `--output-dir` | str | `data/facts` | Writes `tech_facts.txt` / `health_facts.txt` / `maths_facts.txt` |
+| `--tech-output` | str | `<output-dir>/tech_facts.txt` | |
+| `--health-output` | str | `<output-dir>/health_facts.txt` | |
+| `--maths-output` | str | `<output-dir>/maths_facts.txt` | |
 | `--sleep` | float | `1.0` | Pause between groups |
 | `--limit` | int | query default | Override SPARQL LIMIT |
 
@@ -589,6 +617,7 @@ These are imported by the entry points above; they have no project-facing argpar
 | `generate_config.py` | Interactive `setup/*.json` recipe writer (C/H/L/T/B, 2 GB estimate) |
 | `tools/make_fact_mix.py` | Repeat user/Wikidata facts → `data/chat_facts.jsonl` |
 | `tools/wikidata_to_facts.py` | Wikidata SPARQL → `data/facts/wikidata_facts.txt` |
+| `tools/wikidata_to_facts2.py` | Wikidata SPARQL → `data/facts/tech_facts.txt`, `health_facts.txt`, `maths_facts.txt` |
 | `generate.py` | One-shot sample (KV on by default) |
 | `interactive.py` | Generation REPL (chat checkpoints default `--router`) |
 | `tools/calc.py` | Safe AST+Decimal arithmetic (used by the router) |

@@ -30,7 +30,11 @@ Chat **fact data pipelines** and the learning rules that actually stick on this 
   steps does not. New words need a **new BPE and a new checkpoint**, not `--resume`.
 - `tools/wikidata_to_facts.py` pulls modest SPARQL groups (capitals, elements,
   inventors, birth years) into `data/facts/wikidata_facts.txt`. Drops Q-id labels.
-  Uses stdlib urllib (optional SPARQLWrapper). Keep LIMITs small.
+  Uses stdlib urllib (optional SPARQLWrapper). Keep LIMITs small. Same-question
+  conflicts are dropped entirely.
+- `tools/wikidata_to_facts2.py` (`wikidatafetch2`) writes separate tech / health /
+  maths packs (`tech_facts.txt`, `health_facts.txt`, `maths_facts.txt`). Distinct
+  templates per kind; health stays encyclopedic (no dosing/treatment).
 - Dataset `path` / `dataset_path` always wins over combine. JSONL query/response
   records load as native chat lines. `--stop` on generate/auto_train cuts at `User:`.
 
