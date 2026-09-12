@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.0.8
+
+One **App**, related cabinet follow-ups, and a **pick-a-neuron** weight view.
+Router and 2 GB cap are unchanged from 0.0.7.
+
+- `App.py` + `app/` house chat (`/chat`) and npzviewer (`/weights`) with a
+  checkpoint selector. First Load puts that net on Metal; the viewer mmaps the
+  same `weights.npz`. Switching models **restarts** the process (no second net,
+  no in-process hot-swap). Standalone `webui.py` (7860) and `npzviewer.py` (7861)
+  still work; do not run them next to `App.py` or `interactive.py`.
+- After a cabinet **generate**, fact-shaped misses list related **trained**
+  questions (chips / `:related`) instead of auto-Wikipedia. Session
+  `last_entities` is closed-world. Trained topic aliases (`what is neonics` →
+  `Tell me about Neonics.`). `:search` and a cold-start `What is …` still hit
+  Wikipedia. No fuzzy cabinet match.
+- Finding: **one trained string is one key**. v6 recites
+  `What is the capital of France?` → Paris, but `Where is Paris?` is a different
+  question and misses. Wikipedia after generate poisoned follow-ups (commune
+  dumps). Chips: `cabinet · generate` vs `cabinet · replay`.
+- Linked mix: `tools/wikidata_to_facts.py` / `make_fact_mix.py --linked` adds
+  `Where is {city}?`, `What country is {city} in?`, `What is {country}'s capital?`
+  (no “largest city of”). `data/chat_facts_v7.jsonl` +
+  `setup/chat_facts_v7_config.json` from scratch. Do not `--resume` v6 into v7.
+  Smoke that line with `User: Where is Paris? Assistant:` — that is not the
+  France→Paris generate probe.
+- npzviewer pick-a-neuron: top-|weight| partners on a matrix row/column
+  (`token_embedding` = token↔channel; `mlp_expand` = residual↔hidden). Inspect
+  does not rebuild the page (no scroll jump). Heatmap is a block-mean preview;
+  the partner list is the precise view. Tiny viewer recipe:
+  `setup/user_facts_tiny_config.json` (C=16 H=2 L=2 T=16) on
+  `data/user_facts_tiny.jsonl` (`make_fact_mix.py --user-only`). T=16 cannot
+  hold a full fact line; that run is for the inspector, not recitation.
+  C=16 H=16 is illegal here (RoPE needs even `head_dim`).
+- Learned JSONL load splits glued records (missing newline) instead of crashing
+  `remember()` pads a trailing newline. Wiki search: strip `first N`, then
+  `list=search`; skip list/commune pages unless asked; clip to two sentences.
+
 ## 0.0.7
 
 Python **router** around one chat checkpoint: cabinet lookup, then calc, then Wikipedia.
@@ -13,6 +50,11 @@ Python **router** around one chat checkpoint: cabinet lookup, then calc, then Wi
   unchanged). Miss hints and calc are not stored. Network/empty extract falls
   through to a polite miss; snippets are not fed back into the GPT.
   Flask UI: `webui.py` (same session as `interactive.py`; one process).
+  Weight inspector: `npzviewer.py` (host mmap of `.npz` / `.npy` / `.npx`; no
+  Metal load). Cabinet chips: `generate` (Metal recitation) vs `replay`
+  (learned JSONL).
+  Short topic phrases (`first 5 prime numbers`) also try Wikipedia; story
+  openings (`once upon a time`) still miss.
 - Exact normalized cabinet index: [`training/cabinet_index.py`](training/cabinet_index.py).
   No fuzzy match (unobtanium must not hit layer-streaming). Cabinet wins over calc
   (`What is 0 factorial?`). One checkpoint only — do not load a story net in the

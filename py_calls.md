@@ -1,6 +1,6 @@
 # py_calls.md — runnable entry points
 
-**Apple MLX (this tree, v0.0.7):** MacBook Air M3, 2 GB process cap. Start with
+**Apple MLX (this tree, v0.0.8):** MacBook Air M3, 2 GB process cap. Start with
 [`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
 
 Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
@@ -82,6 +82,8 @@ v0.0.5+: `training/memory_controller.py` autoscales batch/context/activations an
 v0.0.6: chat facts train `setup/chat_facts_config.json` → `data/chat_facts.jsonl` only. `combine: true` concatenates every `data/*.txt` and overwrites the cabinet.
 
 v0.0.7: `interactive.py` router (cabinet → calc → Wikipedia). Chat checkpoints default `--router` on. Do not load a second checkpoint in that process.
+
+v0.0.8: `App.py` (selector + `/chat` + `/weights`). Related trained follow-ups after generate. npzviewer pick-a-neuron. v7 linked mix from scratch — do not `--resume` v6.
 
 ### Generate probes `(shared: probe)`
 
@@ -240,6 +242,7 @@ python tools/make_fact_mix.py --learned output/cabinet_learned.jsonl --user-repe
 | `--max-wiki-facts` | int | `0` |
 | `--user-repeat` | int | `300` |
 | `--wiki-repeat` | int | `10` |
+| `--linked` | flag | off |
 
 v6 (cabinet packs + unique learned extras, new BPE, do not `--resume` v5):
 
@@ -249,6 +252,17 @@ python auto_train.py --config setup/chat_facts_v6_config.json \
   --steps 1000 --run-budget 16000 --no-prompt --log-every 1 \
   --prompt "User: What is the capital of France? Assistant:" \
   --stop "User:"
+```
+
+v7 (linked capital/inventor/element questions, new BPE, do not `--resume` v6):
+
+```text
+python tools/make_fact_mix.py --linked --learned output/cabinet_learned.jsonl --user-repeat 20 --max-wiki-facts 0 \
+  --output data/chat_facts_v7.txt --jsonl data/chat_facts_v7.jsonl
+python auto_train.py --config setup/chat_facts_v7_config.json \
+  --checkpoint output/checkpoints/chat_facts_v7 \
+  --steps 1000 --run-budget 16000 --no-prompt --log-every 1 \
+  --prompt "User: Where is Paris? Assistant:" --stop "User:" --temperature 0.2
 ```
 
 ### `tools/wikidata_to_facts.py`
@@ -332,9 +346,9 @@ python generate.py --checkpoint output\checkpoints\BiggerTest256256 --cuda-graph
 
 ### `interactive.py`
 
-REPL; session commands: `:temp`, `:tokens`, `:topk`, `:topp`, `:trace on|off`, `:quit`. Chat mode adds `:clear`, `:system`. Router adds `:search`, `:calc`, `:route`.
+REPL; session commands: `:temp`, `:tokens`, `:topk`, `:topp`, `:trace on|off`, `:quit`. Chat mode adds `:clear`, `:system`. Router adds `:search`, `:calc`, `:route`, `:related`.
 
-Chat checkpoints default **`--router`**: cabinet exact hit → generate stored `User: … Assistant:` (temp 0.2); else calc; else Wikipedia; else miss. Wikipedia hits append to `output/cabinet_learned.jsonl` and replay verbatim next time (not trained into the net). Story checkpoints default generate-every-turn. One checkpoint only (2 GB). `--no-search` skips the network.
+Chat checkpoints default **`--router`**: cabinet exact/topic hit → generate stored `User: … Assistant:` (temp 0.2); else calc; after a generate turn, related misses list trained follow-ups instead of auto-Wikipedia; else Wikipedia; else miss. Wikipedia hits append to `output/cabinet_learned.jsonl` and replay verbatim next time (not trained into the net). Story checkpoints default generate-every-turn. One checkpoint only (2 GB). `--no-search` skips the network. `:search` still forces Wikipedia.
 
 ```text
 python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
@@ -359,9 +373,31 @@ python interactive.py --checkpoint output/checkpoints/<story> --no-router
 | `--no-search` | flag | off |
 | `--no-kv-cache` / `--cuda-graph` | flags | KV on; graph off |
 
+### `App.py`
+
+Central UI: model selector + chat (`/chat`) + npzviewer (`/weights`) in one process.
+Load puts the same checkpoint into both. Chat is Metal (2 GB); viewer is mmap.
+Switching models restarts `App.py` (no second net). Default http://127.0.0.1:7860
+Do not run with `webui.py` or `interactive.py`.
+
+```text
+python App.py
+python App.py --checkpoint output/checkpoints/chat_facts_v6 --chat
+```
+
+| Flag | Type | Default |
+|------|------|---------|
+| `--checkpoint` | str | off (selector only until Load) |
+| `--chat` / `--no-chat` | flags | chat on |
+| `--facts` | str | inferred from the checkpoint `config.json` / `data/<name>.jsonl` |
+| `--host` | str | `127.0.0.1` |
+| `--port` | int | `7860` |
+
+JSON: `GET /api/models`, `POST /api/select` `{"checkpoint":"output/checkpoints/…"}`.
+
 ### `webui.py`
 
-Flask chat UI on the same `ChatSession` as `interactive.py` (one checkpoint, 2 GB).
+Standalone chat UI (same `ChatSession` as `interactive.py`). Prefer `App.py`.
 Quit the REPL first. Default http://127.0.0.1:7860
 
 ```text
@@ -374,8 +410,34 @@ python webui.py --checkpoint output/checkpoints/chat_facts_v6 --chat --facts dat
 | *(same session flags as interactive.py)* | | |
 | `--host` | str | `127.0.0.1` |
 | `--port` | int | `7860` |
+| `--viewer-url` | str | `http://127.0.0.1:7861` |
 
 JSON: `POST /api/chat` `{"message":"…"}`. Optional OpenAI-shaped `POST /v1/chat/completions`.
+Nav: sidebar **Weights 7861** opens `viewer-url/?path=<checkpoint>/weights.npz`.
+Incoming `?checkpoint=` only tags the page (chat cannot hot-swap; restart webui).
+
+### `npzviewer.py`
+
+Web npzviewer for NumPy weight files. Host mmap only (no GPT / Metal load).
+Default http://127.0.0.1:7861
+
+```text
+python npzviewer.py
+python npzviewer.py --open output/checkpoints/chat_facts_v6/weights.npz
+```
+
+| Flag | Type | Default |
+|------|------|---------|
+| `--host` | str | `127.0.0.1` |
+| `--port` | int | `7861` |
+| `--open` | str | off (file selected on first load) |
+| `--chat-url` | str | `http://127.0.0.1:7860` |
+| `--root` | str | project root (path sandbox) |
+
+JSON: `GET /api/files`, `GET /api/manifest?path=…`, `GET /api/tensor?path=&key=`.
+Upload: `POST /api/upload` (`.npz` / `.npy` / `.npx` → `output/cache/npzviewer/`).
+Nav: `/?path=output/checkpoints/…/weights.npz` opens that file. Sidebar **Chat 7860**
+tags `chat-url/?checkpoint=<dir>` (mmap only here; chat still has whatever it loaded).
 
 ---
 
@@ -653,6 +715,8 @@ These are imported by the entry points above; they have no project-facing argpar
 | `tools/wikidata_to_facts2.py` | Wikidata SPARQL → `data/facts/tech_facts.txt`, `health_facts.txt`, `maths_facts.txt` |
 | `generate.py` | One-shot sample (KV on by default) |
 | `interactive.py` | Generation REPL (chat checkpoints default `--router`) |
+| `App.py` | Model selector + chat + npzviewer (one Metal checkpoint) |
+| `npzviewer.py` | Web inspector for `.npz` / `.npy` / `.npx` weights |
 | `tools/calc.py` | Safe AST+Decimal arithmetic (used by the router) |
 | `tools/wiki_search.py` | Wikipedia OpenSearch + summary (used by the router) |
 | `bench_step.py` | Train-step microbench |

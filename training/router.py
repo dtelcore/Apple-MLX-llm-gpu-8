@@ -7,7 +7,7 @@ not fed back into the GPT.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional, Tuple
 
 from tools.calc import try_calc
 from training.cabinet_index import CabinetFact, CabinetIndex, remember
@@ -17,8 +17,13 @@ SearchFn = Callable[[str], Optional[str]]
 
 MISS_HINT = (
     "That is not in the local fact cabinet. For a short encyclopedia summary, "
-    "ask a What/Who/Tell-me-about question (Wikipedia). For open English, start "
-    "a story checkpoint: python interactive.py --checkpoint <story> --no-router"
+    "ask a What/Who/Tell-me-about question or a short topic (Wikipedia). For "
+    "open English, start a story checkpoint: python interactive.py "
+    "--checkpoint <story> --no-router"
+)
+
+RELATED_MISS_HINT = (
+    "Not a trained follow-up. Ask one of these, or :search."
 )
 
 _FACT_PREFIXES = (
@@ -50,6 +55,19 @@ _CALC_WRAPPERS = (
 )
 _CALC_OPS = set("+-*/^%")
 
+# Bare noun phrases may search; story openings must not.
+_STORY_PREFIXES = (
+    "once upon",
+    "once there",
+    "there once",
+    "let me tell",
+    "write a",
+    "write me",
+    "continue the",
+    "continue this",
+)
+_MAX_TOPIC_WORDS = 8
+
 
 @dataclass(frozen=True)
 class RouteDecision:
@@ -57,6 +75,7 @@ class RouteDecision:
     text: str
     fact: Optional[CabinetFact] = None
     detail: str = ""
+    related: Tuple[str, ...] = ()
 
 
 def router_enabled(explicit: Optional[bool], model_name: str) -> bool:
@@ -104,7 +123,15 @@ def looks_like_fact_question(text: str) -> bool:
     s = _bare_query(text).casefold()
     if not s:
         return False
-    return any(s.startswith(p) for p in _FACT_PREFIXES)
+    if any(s.startswith(p) for p in _FACT_PREFIXES):
+        return True
+    if any(s.startswith(p) for p in _STORY_PREFIXES):
+        return False
+    if s.startswith(("python ", ":", "/")):
+        return False
+    words = s.split()
+    # "2+2" is one token and is calc; "once upon a time" is a story prefix.
+    return 2 <= len(words) <= _MAX_TOPIC_WORDS
 
 
 def search_topic(text: str) -> str:
@@ -113,10 +140,12 @@ def search_topic(text: str) -> str:
     if s.endswith("?"):
         s = s[:-1].rstrip()
         s = " ".join(s.split())
+    s = s.rstrip(".")
+    s = " ".join(s.split())
     low = s.casefold()
     for prefix in sorted(_FACT_PREFIXES, key=len, reverse=True):
         if low.startswith(prefix):
-            s = s[len(prefix):].strip(" :?")
+            s = s[len(prefix):].strip(" :?.")
             s = " ".join(s.split())
             break
     parts = s.split()
@@ -153,15 +182,50 @@ def alias_learned_topics(index: CabinetIndex) -> None:
             index.add_alias(topic, fact)
 
 
+def alias_trained_topics(index: CabinetIndex) -> None:
+    """Topic aliases for trained rows (what is neonics → Tell me about Neonics.)."""
+    for fact in list(index.unique_facts()):
+        if fact.source != "trained":
+            continue
+        topic = search_topic(fact.user)
+        if topic:
+            index.add_alias(topic, fact)
+
+
+def _cabinet_decision(fact: CabinetFact, index: Optional[CabinetIndex]) -> RouteDecision:
+    learned = fact.source == "learned"
+    related: Tuple[str, ...] = ()
+    if index is not None and not learned:
+        related = tuple(
+            index.related_prompts(index.entities_of(fact), exclude_key=fact.key)
+        )
+    return RouteDecision(
+        kind="cabinet",
+        text=fact.assistant if learned else fact.generate_prompt,
+        fact=fact,
+        detail="replay" if learned else "generate",
+        related=related,
+    )
+
+
+def _related_tuple(index: Optional[CabinetIndex], entities: Iterable[str]) -> Tuple[str, ...]:
+    if index is None:
+        return ()
+    return tuple(index.related_prompts(entities))
+
+
 def route(
     text: str,
     index: Optional[CabinetIndex],
     *,
     search_enabled: bool = True,
     search_fn: Optional[SearchFn] = None,
+    last_entities: Optional[Iterable[str]] = None,
 ) -> RouteDecision:
-    """Cabinet first, then calc, then Wikipedia, then polite miss."""
+    """Cabinet first, then calc, then related miss, then Wikipedia, then polite miss."""
     raw = text or ""
+    session_ents = frozenset(e for e in (last_entities or ()) if e)
+
     if index is not None:
         fact = index.lookup(raw)
         if fact is None:
@@ -169,17 +233,32 @@ def route(
             if topic:
                 fact = index.lookup(topic)
         if fact is not None:
-            learned = fact.source == "learned"
+            return _cabinet_decision(fact, index)
+
+        hits = index.related_template_hits(raw, session_ents)
+        if len(hits) == 1:
+            return _cabinet_decision(hits[0], index)
+        if len(hits) > 1:
             return RouteDecision(
-                kind="cabinet",
-                text=fact.assistant if learned else fact.generate_prompt,
-                fact=fact,
-                detail="cabinet learned" if learned else "cabinet exact",
+                kind="miss",
+                text=RELATED_MISS_HINT,
+                detail="related_ambiguous",
+                related=tuple(f.user for f in hits[:5]),
             )
 
     calc = try_calc_query(raw)
     if calc is not None:
         return RouteDecision(kind="calc", text=calc, detail="calc")
+
+    if session_ents:
+        mentioned = index.entities_mentioned(raw) if index is not None else frozenset()
+        related = _related_tuple(index, session_ents | mentioned)
+        return RouteDecision(
+            kind="miss",
+            text=RELATED_MISS_HINT,
+            detail="related_miss",
+            related=related,
+        )
 
     if search_enabled and looks_like_fact_question(raw):
         topic = search_topic(raw)

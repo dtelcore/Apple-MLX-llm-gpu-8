@@ -23,6 +23,7 @@ Session commands:
     :search <q>         Wikipedia summary (router; saved to learned JSONL)
     :calc <expr>        safe Decimal arithmetic (router)
     :route              print last router decision
+    :related            reprint trained follow-up questions
     :trace on|off       toggle all tracing for subsequent turns
     :quit / :exit       leave the REPL
 """
@@ -63,7 +64,7 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
         if session.system:
             print(f"System: {session.system}")
     if session.router_on:
-        cmds = ":search Q  :calc EXPR  :route  " + cmds
+        cmds = ":search Q  :calc EXPR  :route  :related  " + cmds
         search_note = "on" if session.search_enabled else "off"
         print(f"Router: cabinet → calc → Wikipedia({search_note}) → miss  (one checkpoint)")
         print(f"Learned KB: Wikipedia hits append to {session.learned_path} (replayed, not trained)")
@@ -84,6 +85,10 @@ def run_repl(args: argparse.Namespace, *, configure_logging: bool = True) -> Non
         if result.learned_added:
             print(f"[cabinet] saved {result.learned_added} → {session.learned_path}")
         print(result.text)
+        if result.related:
+            print("[related]")
+            for q in result.related:
+                print(f"  - {q}")
 
 
 def main() -> None:

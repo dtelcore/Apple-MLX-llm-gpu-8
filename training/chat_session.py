@@ -15,11 +15,12 @@ import numpy as np
 import cli_common
 from logging_config import logger, setup_generate_run_logging
 from model.gpt import GPTModel
-from paths import DATA_DIR, OUTPUT_ROOT, ensure_output_dirs
+from paths import DATA_DIR, OUTPUT_ROOT, checkpoint_weights_relpath, ensure_output_dirs
 from training.router import (
     MISS_HINT,
     RouteDecision,
     alias_learned_topics,
+    alias_trained_topics,
     remember_search_hit,
     route,
     router_enabled,
@@ -55,6 +56,7 @@ class TurnResult:
     detail: str = ""
     quit: bool = False
     learned_added: int = 0
+    related: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +82,8 @@ class ChatSession:
     use_cuda_graph: bool
     history: List[Tuple[str, str]] = field(default_factory=list)
     last_route: Optional[RouteDecision] = None
+    last_entities: List[str] = field(default_factory=list)
+    last_related: List[str] = field(default_factory=list)
     trace_enabled: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -149,8 +153,10 @@ class ChatSession:
 
     def status(self) -> dict:
         n_cab = len(self.cabinet) if self.cabinet is not None else 0
+        ckpt = str(self.args.checkpoint)
         return {
-            "checkpoint": str(self.args.checkpoint),
+            "checkpoint": ckpt,
+            "weights": checkpoint_weights_relpath(ckpt),
             "model": getattr(self.gpt_config, "name", "") or "",
             "vocab_size": int(getattr(self.gpt_config, "vocab_size", 0) or 0),
             "max_len": int(getattr(self.gpt_config, "max_len", 0) or 0),
@@ -164,6 +170,9 @@ class ChatSession:
 
     def clear(self) -> None:
         self.history = []
+        self.last_entities = []
+        self.last_related = []
+        self.last_route = None
 
     def turn(self, prompt: str) -> TurnResult:
         with self._lock:
@@ -219,6 +228,16 @@ class ChatSession:
             else:
                 msg = f"[route] kind={self.last_route.kind} detail={self.last_route.detail}"
             return TurnResult(text=msg, kind="command", detail="route")
+        if self.router_on and prompt == ":related":
+            if not self.last_related:
+                return TurnResult(text="[related] none", kind="command", detail="related")
+            lines = "\n".join(f"- {q}" for q in self.last_related)
+            return TurnResult(
+                text=f"[related]\n{lines}",
+                kind="command",
+                detail="related",
+                related=list(self.last_related),
+            )
         if self.router_on and prompt.startswith(":search"):
             raw_q = prompt[len(":search"):].strip()
             query = search_topic(raw_q) or raw_q
@@ -248,13 +267,22 @@ class ChatSession:
             self.cabinet,
             search_enabled=self.search_enabled,
             search_fn=wiki_summary if self.search_enabled else None,
+            last_entities=self.last_entities,
         )
         self.last_route = decision
+        related = list(decision.related)
+        self.last_related = related
         logger.info("route kind=%s detail=%s prompt=%r", decision.kind, decision.detail, prompt)
         if decision.kind == "cabinet" and decision.fact is not None:
             if decision.fact.source == "learned":
+                self.last_entities = []
                 self._remember_history(prompt, decision.fact.assistant)
-                return TurnResult(text=decision.fact.assistant, kind="cabinet", detail=decision.detail)
+                return TurnResult(
+                    text=decision.fact.assistant,
+                    kind="cabinet",
+                    detail=decision.detail,
+                    related=related,
+                )
             prompt_text = decision.fact.generate_prompt
             prompt_ids = self.tokenizer.encode(prompt_text)
             if not prompt_ids:
@@ -266,15 +294,29 @@ class ChatSession:
                 k=CABINET_GENERATE_TOP_K,
                 p=None,
             )
+            if self.cabinet is not None:
+                self.last_entities = list(self.cabinet.entities_of(decision.fact))
             self._remember_history(prompt, reply)
-            return TurnResult(text=reply, kind="cabinet", detail=decision.detail)
+            return TurnResult(text=reply, kind="cabinet", detail=decision.detail, related=related)
         if decision.kind == "search":
+            self.last_entities = []
             added = self._save_search(prompt, decision.text)
             self._remember_history(prompt, decision.text)
-            return TurnResult(text=decision.text, kind="search", detail=decision.detail, learned_added=added)
+            return TurnResult(
+                text=decision.text,
+                kind="search",
+                detail=decision.detail,
+                learned_added=added,
+                related=related,
+            )
         if decision.kind in ("calc", "miss"):
             self._remember_history(prompt, decision.text)
-            return TurnResult(text=decision.text, kind=decision.kind, detail=decision.detail)
+            return TurnResult(
+                text=decision.text,
+                kind=decision.kind,
+                detail=decision.detail,
+                related=related,
+            )
         return None
 
     def _generate_turn(self, prompt: str) -> TurnResult:
@@ -367,6 +409,7 @@ def load_index(facts_path: str, learned_path: str) -> CabinetIndex:
         logger.warning("cabinet facts failed to load from %s: %s", facts_path, exc)
         print(f"[router] could not load facts: {exc}")
     n_trained = len(index)
+    alias_trained_topics(index)
     n_learned = merge_cabinet(index, learned_path, source="learned")
     alias_learned_topics(index)
     print(

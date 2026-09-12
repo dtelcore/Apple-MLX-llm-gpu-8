@@ -1,7 +1,9 @@
 # Apple MLX / Kepler guide
 
 **This tree is the Apple MLX port (MacBook Air M3, 8 GB unified, 2 GB process cap).**
-Current release: **v0.0.7** — chat router (cabinet / calc / Wikipedia); fact pipelines from 0.0.6; layer streaming still under the 2 GB Metal cap. Start with
+Current release: **v0.0.8** — App.py + related cabinet follow-ups + pick-a-neuron;
+router from 0.0.7; fact pipelines from 0.0.6; layer streaming still under the 2 GB
+Metal cap. Start with
 [`README.md`](README.md). Kepler GT 730 notes below are leftover host-CLI docs.
 
 ---

@@ -77,8 +77,11 @@ class WikidataFactsTests(unittest.TestCase):
             return list(rows)
 
         pairs = collect_facts(["capitals"], query_fn=fake_query, sleep_s=0)
-        self.assertEqual(len(pairs), 1)
-        self.assertEqual(pairs[0][0], "What is the capital of France?")
+        users = [p[0] for p in pairs]
+        self.assertIn("What is the capital of France?", users)
+        self.assertIn("Where is Paris?", users)
+        self.assertIn("What country is Paris in?", users)
+        self.assertIn("What is France's capital?", users)
 
     def test_collect_drops_conflicting_answers(self):
         rows = [
@@ -92,7 +95,8 @@ class WikidataFactsTests(unittest.TestCase):
 
         pairs = collect_facts(["capitals"], query_fn=fake_query, sleep_s=0)
         users = [p[0] for p in pairs]
-        self.assertEqual(users, ["What is the capital of France?"])
+        self.assertIn("What is the capital of France?", users)
+        self.assertNotIn("What is the capital of Kashmir?", users)
         self.assertEqual(
             drop_conflicts(
                 [

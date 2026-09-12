@@ -13,7 +13,14 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from training.cabinet_index import CabinetIndex, merge_cabinet
-from training.router import MISS_HINT, looks_like_fact_question, remember_search_hit, route
+from training.router import (
+    MISS_HINT,
+    RELATED_MISS_HINT,
+    alias_trained_topics,
+    looks_like_fact_question,
+    remember_search_hit,
+    route,
+)
 
 
 class RouterTests(unittest.TestCase):
@@ -26,6 +33,7 @@ class RouterTests(unittest.TestCase):
     def test_cabinet_france_uses_stored_prompt(self):
         d = route("what is the capital of france", self.index, search_enabled=False)
         self.assertEqual(d.kind, "cabinet")
+        self.assertEqual(d.detail, "generate")
         self.assertEqual(d.text, "User: What is the capital of France? Assistant:")
         self.assertEqual(d.fact.assistant, "The capital of France is Paris.")
 
@@ -66,6 +74,7 @@ class RouterTests(unittest.TestCase):
     def test_search_topic_strips_wrappers(self):
         from training.router import search_topic
         self.assertEqual(search_topic("tell me about ford"), "ford")
+        self.assertEqual(search_topic("tell me about Neonics."), "Neonics")
         self.assertEqual(search_topic("what is a ford ?"), "ford")
         self.assertEqual(search_topic("What is unobtanium"), "unobtanium")
 
@@ -109,12 +118,12 @@ class RouterTests(unittest.TestCase):
 
             d = route("tell me about ford", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
             self.assertEqual(d.kind, "cabinet")
-            self.assertEqual(d.detail, "cabinet learned")
+            self.assertEqual(d.detail, "replay")
             self.assertEqual(d.text, "Ford Motor Company is an American automaker.")
 
             d2 = route("what is a ford ?", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
             self.assertEqual(d2.kind, "cabinet")
-            self.assertEqual(d2.detail, "cabinet learned")
+            self.assertEqual(d2.detail, "replay")
 
             reloaded = CabinetIndex()
             merge_cabinet(reloaded, path, source="learned")
@@ -128,5 +137,84 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(looks_like_fact_question("What is unobtanium"))
         self.assertTrue(looks_like_fact_question("what is a ford ?"))
         self.assertTrue(looks_like_fact_question("User: Tell me about widget"))
+        self.assertTrue(looks_like_fact_question("first 5 prime numbers"))
         self.assertFalse(looks_like_fact_question("2+2"))
         self.assertFalse(looks_like_fact_question("once upon a time"))
+
+    def test_short_topic_phrase_searches(self):
+        seen = []
+
+        def capture(q):
+            seen.append(q)
+            return "The first five primes are 2, 3, 5, 7 and 11."
+
+        d = route("first 5 prime numbers", self.index, search_fn=capture)
+        self.assertEqual(d.kind, "search")
+        self.assertEqual(seen, ["first 5 prime numbers"])
+        self.assertIn("2, 3, 5, 7", d.text)
+
+    def test_trained_topic_alias_neonics(self):
+        alias_trained_topics(self.index)
+        d = route("what is neonics", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
+        self.assertEqual(d.kind, "cabinet")
+        self.assertEqual(d.detail, "generate")
+        self.assertIn("Neonics", d.fact.assistant)
+
+    def test_after_france_followup_does_not_search(self):
+        seen = []
+
+        def boom(q):
+            seen.append(q)
+            self.fail("search must not run after a cabinet generate")
+
+        first = route("what is the capital of france", self.index, search_fn=boom)
+        ents = self.index.entities_of(first.fact)
+        d = route(
+            "where is paris?",
+            self.index,
+            search_fn=boom,
+            last_entities=ents,
+        )
+        self.assertEqual(d.kind, "miss")
+        self.assertEqual(d.detail, "related_miss")
+        self.assertEqual(d.text, RELATED_MISS_HINT)
+        self.assertIn("What is the capital of France?", d.related)
+        self.assertEqual(seen, [])
+
+    def test_paris_fact_generates_when_present(self):
+        self.index.add("Where is Paris?", "Paris is the capital of France.")
+        first = route("what is the capital of france", self.index, search_enabled=False)
+        ents = self.index.entities_of(first.fact)
+        d = route(
+            "where is paris?",
+            self.index,
+            search_fn=lambda q: "SHOULD NOT SEARCH",
+            last_entities=ents,
+        )
+        self.assertEqual(d.kind, "cabinet")
+        self.assertEqual(d.detail, "generate")
+        self.assertEqual(d.fact.user, "Where is Paris?")
+
+    def test_unobtanium_never_hits_france_or_neonics(self):
+        first = route("what is the capital of france", self.index, search_enabled=False)
+        ents = self.index.entities_of(first.fact)
+        d = route(
+            "What is unobtanium",
+            self.index,
+            search_fn=lambda q: "SHOULD NOT SEARCH",
+            last_entities=ents,
+        )
+        self.assertEqual(d.kind, "miss")
+        self.assertEqual(d.detail, "related_miss")
+        self.assertIsNone(d.fact)
+        self.assertIn("What is the capital of France?", d.related)
+        self.assertNotIn("Tell me about Neonics.", d.related)
+
+    def test_cold_where_is_paris_may_search(self):
+        d = route(
+            "where is paris?",
+            self.index,
+            search_fn=lambda q: "Paris extract",
+        )
+        self.assertEqual(d.kind, "search")
+        self.assertEqual(d.text, "Paris extract")

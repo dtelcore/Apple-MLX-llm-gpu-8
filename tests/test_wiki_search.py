@@ -38,7 +38,7 @@ class WikiSearchTests(unittest.TestCase):
 
         with mock.patch("tools.wiki_search.urllib.request.urlopen", side_effect=fake_urlopen):
             text = wiki_search.wiki_summary("What is unobtanium")
-        self.assertEqual(text, "A rare fictional metal.")
+        self.assertEqual(text, "Unobtainium — A rare fictional metal.")
 
     def test_network_error_returns_none(self):
         with mock.patch(
@@ -66,7 +66,10 @@ class WikiSearchTests(unittest.TestCase):
 
         with mock.patch("tools.wiki_search.urllib.request.urlopen", side_effect=fake_urlopen):
             text = wiki_search.wiki_summary("python")
-        self.assertEqual(text, "Python is a high-level programming language.")
+        self.assertEqual(
+            text,
+            "Python (programming language) — Python is a high-level programming language.",
+        )
 
     def test_empty_extract_returns_none(self):
         open_search = ["x", ["X"], [""], ["http://example"]]
@@ -80,3 +83,79 @@ class WikiSearchTests(unittest.TestCase):
 
         with mock.patch("tools.wiki_search.urllib.request.urlopen", side_effect=fake_urlopen):
             self.assertIsNone(wiki_search.wiki_summary("X"))
+
+    def test_ordinal_phrase_retries_stripped_topic(self):
+        empty = ["first 5 prime numbers", [], [], []]
+        primes = ["prime numbers", ["Prime number"], [""], [""]]
+        summary = {
+            "title": "Prime number",
+            "type": "standard",
+            "extract": "A prime number is a natural number greater than 1.",
+        }
+
+        def fake_urlopen(req, timeout=8.0):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "opensearch" in url:
+                if "prime+numbers" in url and "first" not in url:
+                    return _http_json(primes)
+                return _http_json(empty)
+            return _http_json(summary)
+
+        with mock.patch("tools.wiki_search.urllib.request.urlopen", side_effect=fake_urlopen):
+            text = wiki_search.wiki_summary("first 5 prime numbers")
+        self.assertEqual(text, "A prime number is a natural number greater than 1.")
+
+    def test_fulltext_search_when_opensearch_empty(self):
+        empty = ["widget flux", [], [], []]
+        sr = {"query": {"search": [{"title": "Widget"}]}}
+        summary = {"title": "Widget", "type": "standard", "extract": "A widget is a placeholder."}
+
+        def fake_urlopen(req, timeout=8.0):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "opensearch" in url:
+                return _http_json(empty)
+            if "list=search" in url:
+                return _http_json(sr)
+            return _http_json(summary)
+
+        with mock.patch("tools.wiki_search.urllib.request.urlopen", side_effect=fake_urlopen):
+            text = wiki_search.wiki_summary("widget flux")
+        self.assertEqual(text, "A widget is a placeholder.")
+
+    def test_skips_list_title_unless_query_asks_for_a_list(self):
+        empty = ["largest city of france", [], [], []]
+        sr = {
+            "query": {
+                "search": [
+                    {"title": "List of communes in France with over 20,000 inhabitants"},
+                    {"title": "Paris"},
+                ]
+            }
+        }
+        communes = {
+            "title": "List of communes in France with over 20,000 inhabitants",
+            "type": "standard",
+            "extract": "As of January 2023, there were 482 communes in France.",
+        }
+        paris = {
+            "title": "Paris",
+            "type": "standard",
+            "extract": "Paris is the capital and largest city of France. It sits on the Seine.",
+        }
+
+        def fake_urlopen(req, timeout=8.0):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "opensearch" in url:
+                return _http_json(empty)
+            if "list=search" in url:
+                return _http_json(sr)
+            if "List_of_communes" in url:
+                return _http_json(communes)
+            return _http_json(paris)
+
+        with mock.patch("tools.wiki_search.urllib.request.urlopen", side_effect=fake_urlopen):
+            text = wiki_search.wiki_summary("largest city of france")
+        self.assertEqual(
+            text,
+            "Paris is the capital and largest city of France. It sits on the Seine.",
+        )

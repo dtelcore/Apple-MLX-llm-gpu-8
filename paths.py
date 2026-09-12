@@ -18,6 +18,7 @@ directory-based checkpoint bundles):
 
 from pathlib import Path
 from typing import List, Optional, Union
+from urllib.parse import quote
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -50,6 +51,50 @@ LEGACY_CONFIG_PATH = SETUP_DIR / "training_config.json"
 QUARTER_FRACTIONS = (0.25, 0.50, 0.75, 1.0)
 QUARTER_NAMES = ("quarter_25", "quarter_50", "quarter_75", "quarter_100")
 BEST_DIR_NAME = "best"
+
+DEFAULT_CHAT_URL = "http://127.0.0.1:7860"
+DEFAULT_VIEWER_URL = "http://127.0.0.1:7861"
+_WEIGHT_SUFFIXES = {".npz", ".npy", ".npx"}
+
+
+def relative_to_project(path: Union[str, Path]) -> str:
+    p = Path(path)
+    try:
+        return str(p.resolve().relative_to(PROJECT_ROOT.resolve()))
+    except ValueError:
+        return str(p)
+
+
+def checkpoint_weights_relpath(checkpoint: Union[str, Path]) -> str:
+    """Project-relative weights file for a checkpoint dir or a weight path."""
+    p = Path(checkpoint)
+    if p.suffix.lower() in _WEIGHT_SUFFIXES:
+        return relative_to_project(p)
+    return relative_to_project(p / "weights.npz")
+
+
+def checkpoint_dir_relpath(path: Union[str, Path]) -> str:
+    """Checkpoint directory from a dir, weights.npz, or run name."""
+    p = Path(path)
+    if p.name == "weights.npz" or p.suffix.lower() in _WEIGHT_SUFFIXES:
+        p = p.parent
+    return relative_to_project(p)
+
+
+def viewer_open_url(viewer_base: str, checkpoint: Union[str, Path]) -> str:
+    """7861 URL that opens the same checkpoint weights (mmap only)."""
+    base = (viewer_base or DEFAULT_VIEWER_URL).rstrip("/")
+    rel = checkpoint_weights_relpath(checkpoint)
+    return f"{base}/?path={quote(rel, safe='/')}"
+
+
+def chat_open_url(chat_base: str, checkpoint: Union[str, Path] = "") -> str:
+    """7860 URL tagged with the viewer’s checkpoint (chat cannot hot-swap)."""
+    base = (chat_base or DEFAULT_CHAT_URL).rstrip("/")
+    if not checkpoint:
+        return base + "/"
+    rel = checkpoint_dir_relpath(checkpoint)
+    return f"{base}/?checkpoint={quote(rel, safe='/')}"
 
 
 def ensure_output_dirs() -> None:

@@ -14,6 +14,7 @@ if str(_ROOT) not in sys.path:
 
 from training.cabinet_index import (
     CabinetIndex,
+    extract_entities,
     load_cabinet,
     merge_cabinet,
     normalize_question,
@@ -97,6 +98,17 @@ class CabinetIndexTests(unittest.TestCase):
         self.assertIsNotNone(hit)
         self.assertIn("Neonics", hit.assistant)
 
+    def test_capital_entities_and_related_prompts(self):
+        ents = extract_entities(
+            "What is the capital of France?",
+            "The capital of France is Paris.",
+        )
+        self.assertEqual(ents, frozenset({"france", "paris"}))
+        related = self.index.related_prompts(ents)
+        self.assertIn("What is the capital of France?", related)
+        self.assertTrue(self.index.entities_mentioned("where is paris?"))
+        self.assertFalse(self.index.entities_mentioned("What is unobtanium"))
+
     def test_conflicting_answers_not_indexed(self):
         idx = CabinetIndex()
         first = idx.add("What is the capital of Kashmir?", "Srinagar.")
@@ -119,6 +131,29 @@ class CabinetIndexTests(unittest.TestCase):
             self.assertEqual(len(loaded), 1)
             self.assertIsNotNone(loaded.lookup("What is the capital of France?"))
             self.assertEqual(loaded.lookup("What is the capital of France?").source, "trained")
+
+    def test_load_jsonl_glued_records_and_junk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "facts.jsonl"
+            a = json.dumps({"query": {"user": "Q1?"}, "response": {"assistant": "A1."}})
+            b = json.dumps({"query": {"user": "Q2?"}, "response": {"assistant": "A2."}})
+            path.write_text(a + b + "\nnot json\n", encoding="utf-8")
+            loaded = load_cabinet(path)
+            self.assertEqual(len(loaded), 2)
+            self.assertIsNotNone(loaded.lookup("Q1?"))
+            self.assertIsNotNone(loaded.lookup("Q2?"))
+
+    def test_remember_pads_missing_newline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "learned.jsonl"
+            idx = CabinetIndex()
+            remember(idx, path, "first question", "First answer.")
+            text = path.read_text(encoding="utf-8").rstrip("\n")
+            path.write_text(text, encoding="utf-8")
+            remember(idx, path, "second question", "Second answer.")
+            lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(json.loads(lines[1])["query"]["user"], "second question")
 
     def test_remember_appends_jsonl_once(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +210,16 @@ class LiveMixTests(unittest.TestCase):
         self.assertIsNotNone(self.mix.lookup("What is the capital of France?"))
         self.assertIsNotNone(self.mix.lookup("Tell me about Neonics."))
         self.assertIsNone(self.mix.lookup("What is unobtanium"))
+
+    def test_live_v7_linked_paris(self):
+        path = _ROOT / "data" / "chat_facts_v7.jsonl"
+        if not path.is_file():
+            self.skipTest("data/chat_facts_v7.jsonl missing")
+        mix = load_cabinet(path)
+        self.assertIsNotNone(mix.lookup("What is the capital of France?"))
+        self.assertIsNotNone(mix.lookup("Where is Paris?"))
+        self.assertIsNotNone(mix.lookup("What country is Paris in?"))
+        self.assertIsNone(mix.lookup("What is unobtanium"))
 
 
 if __name__ == "__main__":

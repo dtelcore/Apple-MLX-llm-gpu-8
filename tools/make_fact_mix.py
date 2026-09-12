@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.make_chat_trainset import qa_record, topic_from_fact, wrap_native
-from tools.wikidata_to_facts import drop_conflicts
+from tools.wikidata_to_facts import drop_conflicts, expand_linked_pairs
 from tools.wikidata_to_facts2 import fold_label
 from training.cabinet_index import _pairs_from_jsonl, normalize_question
 from training.chat_format import ASSISTANT_PREFIX, USER_PREFIX
@@ -170,6 +170,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a repeated chat fact-overfit corpus")
     parser.add_argument("--chat-train", type=str, default=str(ROOT / "data" / "chat_train.txt"))
     parser.add_argument("--user-facts", type=str, default=str(ROOT / "data" / "user_facts.txt"))
+    parser.add_argument(
+        "--user-only",
+        action="store_true",
+        help="Do not also load data/facts/*.txt (tiny viewer / user_facts-only mixes)",
+    )
     parser.add_argument("--output", type=str, default=str(ROOT / "data" / "chat_facts.txt"))
     parser.add_argument(
         "--jsonl", type=str, default=str(ROOT / "data" / "chat_facts.jsonl"),
@@ -189,12 +194,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=DEFAULT_MAX_LEARNED_ASSISTANT_CHARS,
         help="Drop learned answers longer than this (T=256 recitation)",
     )
+    parser.add_argument(
+        "--linked",
+        action="store_true",
+        help="Expand capital/inventor/element rows with linked follow-up questions",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    user = load_user_facts([Path(args.user_facts), *(Path(ROOT / "data" / "facts").glob("*.txt") if (ROOT / "data" / "facts").is_dir() else [])])
+    extra_facts = []
+    facts_dir = ROOT / "data" / "facts"
+    if not bool(getattr(args, "user_only", False)) and facts_dir.is_dir():
+        extra_facts = list(facts_dir.glob("*.txt"))
+    user = load_user_facts([Path(args.user_facts), *extra_facts])
     learned: List[Tuple[str, str]] = []
     if str(args.learned).strip():
         learned = load_learned_extras(
@@ -203,6 +217,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             max_assistant_chars=int(args.max_learned_chars),
         )
         user = list(user) + learned
+    if bool(getattr(args, "linked", False)):
+        user = expand_linked_pairs(user)
     wiki = load_wiki_core(Path(args.chat_train), max_facts=int(args.max_wiki_facts))
     pairs = build_pairs(
         user_facts=user,

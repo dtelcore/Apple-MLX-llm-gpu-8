@@ -4,9 +4,10 @@ From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
 
-**v0.0.7** — chat **router** (cabinet → calc → Wikipedia) under the **2 GB**
-process budget (hardcoded, not a CLI). Soft machine guard: **5.5 GB**. Fact
-pipelines are from 0.0.6; layer streaming is from 0.0.5.
+**v0.0.8** — **App.py** (chat + weight viewer + model selector), related
+cabinet follow-ups, pick-a-neuron. Router is from 0.0.7 (cabinet → calc →
+Wikipedia). **2 GB** process budget (hardcoded). Soft machine guard: **5.5 GB**.
+Fact pipelines are from 0.0.6; layer streaming is from 0.0.5.
 
 ```bash
 # Python 3.11 or 3.12
@@ -21,17 +22,24 @@ python tools/wikidata_to_facts2.py # optional: tech/health/maths → data/facts/
 python tools/make_fact_mix.py      # repeat facts → data/chat_facts.jsonl
 python auto_train.py --config setup/chat_facts_config.json --checkpoint output/checkpoints/chat_facts_v5 --steps 1000 --no-prompt
 python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
+python App.py
+python App.py --checkpoint output/checkpoints/chat_facts_v6 --chat
 python webui.py --checkpoint output/checkpoints/chat_facts_v5 --chat
+python npzviewer.py --open output/checkpoints/chat_facts_v6/weights.npz
 ```
 
 Chat checkpoints default to a **Python router**: exact cabinet hit → generate the
-stored `User: … Assistant:` line; `2+2` → Decimal calc; unknown `What is …` →
-Wikipedia summary; otherwise a miss plus a hint to a **separate** story REPL
-(`--no-router`). Wikipedia hits are appended to `output/cabinet_learned.jsonl`
-and replayed later; they are not trained into the checkpoint. Flask chat UI:
-`python webui.py --checkpoint output/checkpoints/chat_facts_v5 --chat` (same
-session as `interactive.py`; do not run both). Never load two checkpoints in
-one process. `--no-search` skips the network. Do not `combine` `data/*.txt`.
+stored `User: … Assistant:` line; `2+2` → Decimal calc; after a generate turn,
+unknown follow-ups list **related trained questions** (UI chips / `:related`)
+instead of auto-Wikipedia; `:search` or a cold-start `What is …` still hits
+Wikipedia. Wikipedia hits are appended to `output/cabinet_learned.jsonl`
+and replayed later; they are not trained into the checkpoint. Central UI:
+`python App.py` (http://127.0.0.1:7860) — model selector loads one checkpoint
+into chat (Metal) and npzviewer (mmap). Switching models restarts the process.
+Standalone `webui.py` / `npzviewer.py` still work; do not run them next to
+`App.py` or `interactive.py`. Never load two checkpoints in one process.
+`--no-search` skips the network. Do not `combine` `data/*.txt`. Do not
+`--resume` v6 into v7.
 
 Stable English recipe on this Air: `setup/story_c256_l6_config.json`
 (C=256, L=6, T=256, batch 4, accum 4, GPT-2 residual scale). Smaller smoke:

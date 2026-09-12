@@ -114,6 +114,45 @@ def usable_label(text: str) -> bool:
     return True
 
 
+def linked_variants(user: str, assistant: str) -> List[Pair]:
+    """Extra trained questions that share the same capital/inventor/element slots."""
+    u = " ".join((user or "").split())
+    a = " ".join((assistant or "").split()).rstrip(".")
+    out: List[Pair] = []
+    cap_u = re.match(r"^What is the capital of (.+)\?$", u)
+    cap_a = re.match(r"^The capital of (.+) is (.+)$", a)
+    if cap_u and cap_a and cap_u.group(1) == cap_a.group(1):
+        country, city = cap_a.group(1), cap_a.group(2)
+        body = f"{city} is the capital of {country}."
+        out.append((f"Where is {city}?", body))
+        out.append((f"What country is {city} in?", body))
+        out.append((f"What is {country}'s capital?", f"The capital of {country} is {city}."))
+        return out
+    inv_u = re.match(r"^Who invented (.+)\?$", u)
+    inv_a = re.match(r"^(.+) is credited with inventing (.+)$", a)
+    if inv_u and inv_a and inv_u.group(1) == inv_a.group(2):
+        inv, person = inv_u.group(1), inv_a.group(1)
+        out.append((f"Who is credited with inventing {inv}?", assistant if assistant.endswith(".") else assistant + "."))
+        out.append((f"What did {person} invent?", assistant if assistant.endswith(".") else assistant + "."))
+        return out
+    el_u = re.match(r"^What is the atomic number of (.+)\?$", u)
+    el_a = re.match(r"^The atomic number of (.+) is (\d+)$", a)
+    if el_u and el_a and el_u.group(1) == el_a.group(1):
+        num = el_a.group(2)
+        asst = assistant if assistant.endswith(".") else assistant + "."
+        out.append((f"Which element has atomic number {num}?", asst))
+    return out
+
+
+def expand_linked_pairs(pairs: Iterable[Pair]) -> List[Pair]:
+    """Append linked variants; drop any new question that conflicts."""
+    base = list(pairs)
+    extra: List[Pair] = []
+    for user, assistant in base:
+        extra.extend(linked_variants(user, assistant))
+    return drop_conflicts(dedupe_pairs(base + extra))
+
+
 def verbalize(row: dict, kind: str) -> Optional[Pair]:
     """Turn one SPARQL binding into (user, assistant) or None."""
     if kind == "capitals":
@@ -248,7 +287,7 @@ def collect_facts(
                 pairs.append(pair)
         if i + 1 < len(kinds) and sleep_s > 0:
             time.sleep(sleep_s)
-    return drop_conflicts(dedupe_pairs(pairs))
+    return expand_linked_pairs(drop_conflicts(dedupe_pairs(pairs)))
 
 
 def write_facts(pairs: Sequence[Pair], path: Path) -> int:

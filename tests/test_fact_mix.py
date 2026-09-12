@@ -18,9 +18,11 @@ from tools.make_fact_mix import (
     build_pairs,
     load_learned_extras,
     load_user_facts,
+    main as make_fact_mix_main,
     neonics_pair,
     write_outputs,
 )
+from tools.wikidata_to_facts import expand_linked_pairs, linked_variants
 
 
 class FactMixTests(unittest.TestCase):
@@ -103,6 +105,55 @@ class FactMixTests(unittest.TestCase):
                 max_assistant_chars=512,
             )
             self.assertEqual(extras, [("tell me about python", "Python is a programming language.")])
+
+    def test_expand_linked_capital_questions(self):
+        extra = linked_variants(
+            "What is the capital of France?",
+            "The capital of France is Paris.",
+        )
+        users = [p[0] for p in extra]
+        self.assertIn("Where is Paris?", users)
+        self.assertIn("What country is Paris in?", users)
+        expanded = expand_linked_pairs([
+            ("What is the capital of France?", "The capital of France is Paris."),
+        ])
+        self.assertGreater(len(expanded), 1)
+
+    def test_user_only_skips_data_facts_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user = root / "user_facts.txt"
+            user.write_text(
+                "User: What is Apple MLX GPT? Assistant: A tiny inspectable GPT.\n",
+                encoding="utf-8",
+            )
+            facts = root / "data" / "facts"
+            facts.mkdir(parents=True)
+            (facts / "extra.txt").write_text(
+                "User: What is boron? Assistant: Boron is element 5.\n",
+                encoding="utf-8",
+            )
+            out_txt = root / "tiny.txt"
+            out_jsonl = root / "tiny.jsonl"
+            rc = make_fact_mix_main(
+                [
+                    "--user-facts",
+                    str(user),
+                    "--user-only",
+                    "--user-repeat",
+                    "2",
+                    "--max-wiki-facts",
+                    "0",
+                    "--output",
+                    str(out_txt),
+                    "--jsonl",
+                    str(out_jsonl),
+                ]
+            )
+            self.assertEqual(rc, 0)
+            text = out_txt.read_text(encoding="utf-8")
+            self.assertIn("Apple MLX GPT", text)
+            self.assertNotIn("boron", text.casefold())
 
 
 if __name__ == "__main__":
