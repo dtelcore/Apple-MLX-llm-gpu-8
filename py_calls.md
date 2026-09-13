@@ -1,6 +1,6 @@
 # py_calls.md — runnable entry points
 
-**Apple MLX (this tree, v0.0.8):** MacBook Air M3, 2 GB process cap. Start with
+**Apple MLX (this tree, v0.0.9):** MacBook Air M3, 2 GB process cap. Start with
 [`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
 
 Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
@@ -84,6 +84,7 @@ v0.0.6: chat facts train `setup/chat_facts_config.json` → `data/chat_facts.jso
 v0.0.7: `interactive.py` router (cabinet → calc → Wikipedia). Chat checkpoints default `--router` on. Do not load a second checkpoint in that process.
 
 v0.0.8: `App.py` (selector + `/chat` + `/weights`). Related trained follow-ups after generate. npzviewer pick-a-neuron. v7 linked mix from scratch — do not `--resume` v6.
+v0.0.9: `unguided_trainer.py` + `autotrainer_daemon.py`. No stdin. Fresh BPE per harvest mix. Do not `--resume` v7 into a new mix.
 
 ### Generate probes `(shared: probe)`
 
@@ -221,8 +222,19 @@ python generate_config.py --from setup/chat_c256_l6_config.json --embedding-dim 
 Repeat native `User:` / `Assistant:` lines into the chat cabinet. Loads
 `data/user_facts.txt` and `data/facts/*.txt`. Default wiki slice from
 `chat_train.txt` is **off** (`--max-wiki-facts 0`). Writes `data/chat_facts.txt`
-and `data/chat_facts.jsonl`. Train those with `setup/chat_facts_config.json`,
+and `data/chat_facts.jsonl`. Drops keys listed in `data/cabinet_quarantine.json`.
+Train those with `setup/chat_facts_config.json`,
 not `chat_c256_l6_config.json`.
+
+### `tools/eval_cabinet_bindings.py`
+
+Router precision/recall on `data/cabinet_binding_eval.jsonl`. Optional
+`--checkpoint` runs teacher-forced expected-token ranks (Metal). No cosine
+or entropy pass/fail thresholds.
+
+```text
+python tools/eval_cabinet_bindings.py --facts data/chat_facts_v7.jsonl
+```
 
 ```text
 python tools/make_fact_mix.py
@@ -348,7 +360,7 @@ python generate.py --checkpoint output\checkpoints\BiggerTest256256 --cuda-graph
 
 REPL; session commands: `:temp`, `:tokens`, `:topk`, `:topp`, `:trace on|off`, `:quit`. Chat mode adds `:clear`, `:system`. Router adds `:search`, `:calc`, `:route`, `:related`.
 
-Chat checkpoints default **`--router`**: cabinet exact/topic hit → generate stored `User: … Assistant:` (temp 0.2); else calc; after a generate turn, related misses list trained follow-ups instead of auto-Wikipedia; else Wikipedia; else miss. Wikipedia hits append to `output/cabinet_learned.jsonl` and replay verbatim next time (not trained into the net). Story checkpoints default generate-every-turn. One checkpoint only (2 GB). `--no-search` skips the network. `:search` still forces Wikipedia.
+Chat checkpoints default **`--router`**: trained exact / file alias / unique article rewrite (`Who invented the plough?` → `Who invented Plough?`) → generate stored `User: … Assistant:` (temp 0.2); learned Wikipedia overlay next; else calc; after a generate turn, related misses list trained follow-ups instead of auto-Wikipedia; else Wikipedia; else miss. Trained keys win over learned Howdy-style overlays (`data/cabinet_aliases.json`). Quarantined source rows (`data/cabinet_quarantine.json`) never enter the trained cabinet. Generated replies are never replaced; a stored-target mismatch is `generate_target_mismatch` and appends `output/cabinet_retrain.jsonl` plus `output/cabinet_diagnostics.jsonl`. Story checkpoints default generate-every-turn. One checkpoint only (2 GB). `--no-search` skips the network. `:search` still forces Wikipedia.
 
 ```text
 python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
@@ -370,6 +382,8 @@ python interactive.py --checkpoint output/checkpoints/<story> --no-router
 | `--router` / `--no-router` | flags | chat name → on; story → off |
 | `--facts` | str | `data/chat_facts.jsonl` |
 | `--learned` | str | `output/cabinet_learned.jsonl` |
+| `--cabinet-retrain-log` | str | `output/cabinet_retrain.jsonl` |
+| `--cabinet-diagnostics-log` | str | `output/cabinet_diagnostics.jsonl` |
 | `--no-search` | flag | off |
 | `--no-kv-cache` / `--cuda-graph` | flags | KV on; graph off |
 
@@ -711,6 +725,7 @@ These are imported by the entry points above; they have no project-facing argpar
 | `auto_train.py` | Train + smoke generate |
 | `generate_config.py` | Interactive `setup/*.json` recipe writer (C/H/L/T/B, 2 GB estimate) |
 | `tools/make_fact_mix.py` | Repeat user/Wikidata facts → `data/chat_facts.jsonl` |
+| `tools/eval_cabinet_bindings.py` | Router fixture + optional teacher-forced ranks |
 | `tools/wikidata_to_facts.py` | Wikidata SPARQL → `data/facts/wikidata_facts.txt` |
 | `tools/wikidata_to_facts2.py` | Wikidata SPARQL → `data/facts/tech_facts.txt`, `health_facts.txt`, `maths_facts.txt` |
 | `generate.py` | One-shot sample (KV on by default) |

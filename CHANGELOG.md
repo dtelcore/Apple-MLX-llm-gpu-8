@@ -1,9 +1,25 @@
 # Changelog
 
+## 0.0.9
+
+Unguided trainer kernel and autotrainer daemon (no stdin). Fresh checkpoint
+dir and fresh BPE only; no `--resume` across a mix. App.py still requires a
+restart to load a promoted net.
+
 ## 0.0.8
 
 One **App**, related cabinet follow-ups, and a **pick-a-neuron** weight view.
 Router and 2 GB cap are unchanged from 0.0.7.
+
+Cabinet routing now rewrites a leading `the`/`a`/`an` only inside inventor and
+capital templates, and loads explicit aliases from `data/cabinet_aliases.json`
+(trained keys win over learned Wikipedia overlays). Bad source rows in
+`data/cabinet_quarantine.json` are excluded from the runtime cabinet and from
+`make_fact_mix.py`. Trained cabinet replies stay model-generated; a stored-target
+mismatch is flagged `generate_target_mismatch`, written to
+`output/cabinet_retrain.jsonl`, and recorded in `output/cabinet_diagnostics.jsonl`.
+Offline router/token-rank probe: `tools/eval_cabinet_bindings.py` (no cosine
+thresholds; teacher-forced ranks only with `--checkpoint`).
 
 - `App.py` + `app/` house chat (`/chat`) and npzviewer (`/weights`) with a
   checkpoint selector. First Load puts that net on Metal; the viewer mmaps the

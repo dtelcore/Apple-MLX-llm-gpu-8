@@ -4,10 +4,38 @@ From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
 
-**v0.0.8** — **App.py** (chat + weight viewer + model selector), related
+**v0.0.9** — unguided trainer + autotrainer daemon. **v0.0.8** — **App.py** (chat + weight viewer + model selector), related
 cabinet follow-ups, pick-a-neuron. Router is from 0.0.7 (cabinet → calc →
 Wikipedia). **2 GB** process budget (hardcoded). Soft machine guard: **5.5 GB**.
 Fact pipelines are from 0.0.6; layer streaming is from 0.0.5.
+
+
+## Where this sits vs GPT-2
+
+Hand VJPs, a hardcoded **2 GB** Metal budget (layer streaming), and a Python router
+(cabinet → calc → Wikipedia) make this an **instrumented research GPT**, not a
+black-box mini ChatGPT. Forward cost scales roughly like `L * T * C^2`;
+precise TFLOPs depend on stream vs resident and are not quoted here.
+
+| | **chat_facts_v4** | **chat_facts_v7** | **GPT-2 small** |
+|---|---|---|---|
+| Width / depth | C=512 · **L=6** · H=8 | C=512 · **L=16** · H=8 | C=768 · L=12 · H=12 |
+| Context `T` | 256 | 512 | 1024 |
+| Vocab | ~1587 (mix BPE) | 4086 | 50257 |
+| Params (counted) | **20.5M** | **54.6M** | ~124M |
+| Weights on disk | ~82 MB | ~219 MB | (release artifacts) |
+| Pos / norm | RoPE · RMSNorm | RoPE · RMSNorm | learned pos · LayerNorm |
+| Gradients | explicit VJPs | explicit VJPs | framework autograd |
+| Layer strategy | stream | stream | resident |
+| Train steps / loss | 400 · ~0.033 | 1000 · ~0.039 | web-text LM (not comparable) |
+| Objective | closed fact cabinet | linked cabinet + related UX | open web text |
+| Best for | clean recitation (France→Paris) | product checkpoint + App | general English |
+
+**v7 ≈ half of GPT-2 small in params**, half the context, ~1/12 the vocab — in the
+“serious small transformer” band — but trained for **recitation**, not open-ended LM.
+**v4** remains the cleanest small-cabinet baseline; do not `--resume` v4/v6/v7 across
+vocab or mix changes. Do not train more v7 or rebuild its mix for alias fixes.
+
 
 ```bash
 # Python 3.11 or 3.12
@@ -55,6 +83,38 @@ Keep the lid open on this fanless Air; long GEMMs will thermal-throttle.
 
 Live path: `model/mlx/ops.py` (forward primitives + hand VJPs). Do not use
 `mx.value_and_grad`, `mlx.nn`, or `mlx.optimizers` on the train loop.
+
+
+## Progress (0.0.1 → 0.0.9)
+
+Software (see `CHANGELOG.md` for detail):
+
+| Ver | Leap |
+|---|---|
+| 0.0.1–0.0.2 | Plan → MLX port (explicit VJPs, 2 GB budget) |
+| 0.0.3 | Fast BPE + train preflight |
+| 0.0.4 | Memory controller (never changes C/L/H) |
+| 0.0.5 | Sequential layer streaming |
+| 0.0.6 | Fact pipelines + Wikidata packs |
+| 0.0.7 | Router (cabinet → calc → Wikipedia) + web UI |
+| 0.0.8 | `App.py` (chat + pick-a-neuron + selector), related chips, topic/`the` aliases |
+| 0.0.9 | Unguided trainer kernel + autotrainer daemon (no stdin) |
+
+Cabinet checkpoints under `output/checkpoints/`:
+
+| CKPT | Shape | Params | Notes |
+|---|---|---:|---|
+| v1 | C512 L6 T256 | — | first cabinet |
+| v2 | C512 L6 · small V | — | recitation emerging |
+| v3 | C512 L12 | — | deeper on dirty multi-answer mix → worse |
+| **v4** | C512 L6 | **20.5M** | fair mix; best clean France→Paris |
+| v5 | C512 L6 | — | broader 20× topics |
+| v6 | C512 L16 T512 | — | linked/learned fold-in |
+| **v7** | C512 L16 T512 | **54.6M** | current product; do not train more |
+| `user_facts_tiny` | C16 L2 T16 | 0.02M | weight inspector only |
+
+Lessons: dirty multi-answer mixes fail; fair one-answer mixes stick; router aliases
+fix **lookup**, not binding; never `--resume` across vocab / arch / mix changes.
 
 ## Memory controller (2 GB)
 
