@@ -166,6 +166,58 @@ python train.py --compare-quarters --checkpoint output\checkpoints\BiggerTest256
 
 ---
 
+### `unguided_trainer.py`
+
+Unattended train kernel. No `input()`. Fresh checkpoint dir and fresh BPE
+only — do not `--resume` v6/v7 into a new mix. Remix aborts and writes
+`output/runs/<name>/NEXT_MIX.json` plus `ABORT_REASON`.
+
+```text
+python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
+python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json
+python unguided_trainer.py --config ... --policy ... --unguarded
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--config` | str | required | Recipe JSON (architecture + dataset). Defaults stay in the v7 recipe / autoscale, not a hardcoded B/LR. |
+| `--policy` | str | required | `setup/unguided_v7_policy.json` |
+| `--dry-run` | flag | off | Print plan + param estimate; **no Metal** |
+| `--unguarded` | flag | off | Skip quarantine on a declared next-mix only. Cannot skip NaN/spike abort, stdin, or cross-BPE resume. |
+| `--max-steps` | int | policy | Override |
+| `--eval-every` | int | policy | Override |
+
+Stop App first. First Metal check is `--dry-run`, then a short run into a **new** dir.
+
+### `autotrainer_daemon.py`
+
+Poll `output/cabinet_retrain.jsonl`, emit `data/chat_facts_unguided.jsonl`,
+spawn `unguided_trainer.py` as a subprocess, gate on anchors, `promote_best`,
+write `output/autotrainer_status.json`. Parent never imports `model.gpt`.
+Crash/timeout poisons that harvest block (`output/autotrainer_state.json`),
+backs off, and refuses more than `max_trains_per_hour` (default 2).
+
+```text
+python autotrainer_daemon.py --dry-run --once
+python autotrainer_daemon.py --once
+python autotrainer_daemon.py --manifest setup/autotrainer_config.json
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--manifest` | str | `setup/autotrainer_config.json` | Poll / queue / mix weights (not train B/LR) |
+| `--retrain-log` | str | `output/cabinet_retrain.jsonl` | |
+| `--status` | str | `output/autotrainer_status.json` | |
+| `--policy` | str | `setup/unguided_v7_policy.json` | |
+| `--recipe` | str | `setup/chat_facts_v7_config.json` | Base architecture; child gets a fresh recipe pointing at the harvest mix |
+| `--once` | flag | off | One harvest cycle |
+| `--dry-run` | flag | off | Build/print plan; no kernel |
+| `--unguarded` | flag | off | Skip quarantine on the bounded mix |
+| `--require-idle-app` | flag | on | Refuse spawn if App wrote `output/metal_holder.json` |
+| `--state` | str | `output/autotrainer_state.json` | Offset, poison keys, backoff, train timestamps |
+
+App shows `/api/autotrainer`. Chat must restart to load a promoted net.
+
 ### `auto_train.py`
 
 Train then smoke-generate.
@@ -709,7 +761,7 @@ These are imported by the entry points above; they have no project-facing argpar
 | Path | Role |
 |------|------|
 | `model/*`, `model/cuda/*` | GPT + kernels / ops / allocator / FP16 storage / graph |
-| `training/*` | dataset, loss, checkpoint, optimizer, probe, quality, eval, **memory_controller** (2 GB autoscale) |
+| `training/*` | dataset, loss, checkpoint, optimizer, probe, quality, eval, **memory_controller** (2 GB autoscale), **unguided** (decide/harvest/gate/supervisor) |
 | `tokenizer/tokenizer.py`, `tokenizer/bpe.py` | Char + experimental BPE |
 | `setup/config_loader.py`, `dataset_setup.py`, `model_config.py`, `training_presets.py`, `weight_init.py` | Setup helpers |
 | `tools/tracing/runtime_metrics.py` | SyncMeter / MemoryTimeline / KernelTimeline (enabled via train flags) |
@@ -723,6 +775,8 @@ These are imported by the entry points above; they have no project-facing argpar
 |---------|---------|
 | `train.py` | Train / resume / generate menu / quality |
 | `auto_train.py` | Train + smoke generate |
+| `unguided_trainer.py` | Unattended train kernel (no stdin) |
+| `autotrainer_daemon.py` | Harvest retrain log, spawn kernel, gate, promote |
 | `generate_config.py` | Interactive `setup/*.json` recipe writer (C/H/L/T/B, 2 GB estimate) |
 | `tools/make_fact_mix.py` | Repeat user/Wikidata facts → `data/chat_facts.jsonl` |
 | `tools/eval_cabinet_bindings.py` | Router fixture + optional teacher-forced ranks |

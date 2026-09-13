@@ -7,25 +7,25 @@ todos:
     status: completed
   - id: extract-primitives
     content: Adapt zip scaffolding in training/unguided/ (session, loop, eval_suite, decide) to this repo's train.py helpers; do not replace the 0.0.8 changelog
-    status: in_progress
+    status: completed
   - id: policy-entry
     content: Land unguided_trainer.py, setup/unguided_v7_policy.json, dry-run, no-stdin
-    status: pending
+    status: completed
   - id: decision-engine
     content: Wire decide() to decisions.jsonl, ABORT_REASON, NEXT_MIX.json, and promote_best
-    status: pending
+    status: completed
   - id: harvester-mix
     content: Parse cabinet_retrain.jsonl and emit a bounded perturbed mix plus NEXT_MIX recipe
-    status: pending
+    status: completed
   - id: subprocess-supervisor
     content: Isolated Metal subprocess for one fresh unguided run with spike/plateau/OOM abort
-    status: pending
+    status: completed
   - id: gatekeeper-signal
     content: Eval gate on anchors plus queued mismatches; promote under output/checkpoints; status JSON
-    status: pending
+    status: completed
   - id: tests-docs
     content: Unit-test decide, dry-run, harvester, and gate; document both entry points in py_calls.md
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -169,8 +169,10 @@ Reuse [`drop_quarantined`](/Users/it/dev/Apple MLX/training/cabinet_index.py) an
 
 [`training/unguided/harvest.py`](/Users/it/dev/Apple MLX/training/unguided/harvest.py):
 
-- Poll / parse `output/cabinet_retrain.jsonl` (offset file so rows are not re-eaten).
-- Deduplicate by normalized question. Keep `BINDING_ENTITY_SWAP` and `TARGET_MISMATCH` only.
+- Poll / parse `output/cabinet_retrain.jsonl` (persisted offset in `output/autotrainer_state.json`).
+- Deduplicate by normalized question **and** skip consumed/poison keys globally (re-appended mismatches do not start another train).
+- Keep `BINDING_ENTITY_SWAP` and `TARGET_MISMATCH` only.
+- Truncate clamps the cursor; it does not reset to 0 and replay. Poison/consumed keys still filter a rotated log.
 - Require `min_retrain_queue_size` (policy, default 5) before a cycle; cap at `max_retrain_queue_size`.
 - Emit a **bounded** mix via existing [`tools/make_fact_mix.py`](/Users/it/dev/Apple MLX/tools/make_fact_mix.py):
   - **retrain slice:** harvested expected answers, plus a small closed set of prompt variants (active/passive inventor, article form). Not open-ended generation.
@@ -188,6 +190,7 @@ Reuse [`drop_quarantined`](/Users/it/dev/Apple MLX/training/cabinet_index.py) an
 - Process exit releases Metal. Parent never imports `model.gpt`.
 - Refuse to spawn if another Metal holder is marked busy in `output/autotrainer_status.json` or if `--require-idle-app` (default on).
 - Traps: loss spike (`loss_spike_ratio`, policy default 3.0× median), plateau (`delta < 0.001` over N steps, configurable), non-zero child exit, wall clock. Kill child; write `ABORT_REASON`.
+- **Containment** ([`training/unguided/containment.py`](/Users/it/dev/Apple MLX/training/unguided/containment.py)): on NaN/spike/nonzero/124, poison that harvest block, advance the cursor, exponential backoff (`crash_backoff_s` → `backoff_max_s`). Cap `max_trains_per_hour` (default 2). Gate-fail keeps the rows for `max_gate_retries` (default 2) then poisons. Do not relaunch the same crashed mix.
 - 2 GB cap remains in [`training/memory_controller.py`](/Users/it/dev/Apple MLX/training/memory_controller.py). `metal_memory_limit_mb` in the manifest is documentation / preflight only — cannot raise the hardcoded budget.
 
 ## 7. Daemon Phase 3–4 — gatekeeper and signaling
@@ -202,7 +205,7 @@ On pass: `promote_best` into `output/checkpoints/unguided_<stamp>/best`. Write [
 
 App.py changes (small): poll or show that status. Viewer can mmap the new `weights.npz` without Metal. Chat **must restart** the process to load the new net — same as today's selector. Do not claim hot-reload of generate.
 
-On fail: leave `best/` untouched; append decisions.jsonl; keep the retrain rows for the next cycle.
+On gate fail: leave `best/` untouched; keep the retrain rows for up to `max_gate_retries` cycles (with backoff); then poison those keys. On child crash: poison the harvest ids immediately and do not relaunch that block.
 
 ## 8. Manifest
 
@@ -211,7 +214,8 @@ On fail: leave `best/` untouched; append decisions.jsonl; keep the retrain rows 
 ## 9. Tests and version
 
 - Unit tests for `decide()` (spike, patience, promote, remix-abort, wall-clock).
-- Harvester: dedupe, quarantine, variant generation, min-queue no-op.
+- Harvester: dedupe, quarantine, variant generation, min-queue no-op, skip poison keys.
+- Containment: crash poisons the block + backoff; gate-fail keeps then poisons; max trains per hour; truncate does not replay.
 - Dry-run: no `mlx` device required (kernel and daemon `--dry-run`).
 - Supervisor: refuse spawn when status says Metal busy (mocked).
 - Gate: fail closed if anchors miss; do not promote.

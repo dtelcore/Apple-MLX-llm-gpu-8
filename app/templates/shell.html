@@ -56,6 +56,7 @@
       <a class="btn ghost{% if view != 'weights' %} active{% endif %}" id="tab-chat" href="/?view=chat">Chat</a>
       <a class="btn ghost{% if view == 'weights' %} active{% endif %}" id="tab-weights" href="/?view=weights">Weights</a>
       <span id="status">{% if loaded and selected %}Metal · {{ selected.name }}{% elif selected %}Selected {{ selected.name }} — press Load{% else %}No model loaded{% endif %}</span>
+      <span id="autotrainer"></span>
     </header>
     <iframe id="pane" title="Apple MLX panel"></iframe>
   </div>
@@ -131,6 +132,26 @@
     });
 
     show(view === "weights" ? "weights" : "chat");
+
+    async function pollAutotrainer() {
+      const el = document.getElementById("autotrainer");
+      if (!el) return;
+      try {
+        const res = await fetch("/api/autotrainer");
+        const data = await res.json();
+        if (data && data.needs_chat_restart && data.checkpoint) {
+          el.textContent = "Promoted " + data.checkpoint + " — restart chat to load (no hot-swap).";
+        } else if (data && data.state === "training") {
+          el.textContent = "Autotrainer running — stop App before a Metal train.";
+        } else {
+          el.textContent = "";
+        }
+      } catch (_err) {
+        el.textContent = "";
+      }
+    }
+    pollAutotrainer();
+    setInterval(pollAutotrainer, 15000);
   </script>
 </body>
 </html>

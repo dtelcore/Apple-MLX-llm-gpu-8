@@ -6,6 +6,23 @@ Unguided trainer kernel and autotrainer daemon (no stdin). Fresh checkpoint
 dir and fresh BPE only; no `--resume` across a mix. App.py still requires a
 restart to load a promoted net.
 
+- `unguided_trainer.py` trains/evals/decides without `input()`. Remix aborts
+  with `NEXT_MIX.json` + `ABORT_REASON`. Policy:
+  `setup/unguided_v7_policy.json`. `--dry-run` prints the plan and exits
+  without Metal.
+- `autotrainer_daemon.py` harvests `output/cabinet_retrain.jsonl` by byte
+  offset (BINDING_ENTITY_SWAP / TARGET_MISMATCH only), builds a bounded mix
+  (harvested entities + Paris / Cubitt / streaming / how-to anchors + clean
+  v7 rows), and spawns the kernel as an isolated subprocess. It refuses to
+  launch while App holds Metal. Gate is fail-closed on anchors; promote
+  uses existing `promote_best` under `output/checkpoints/`. Crash/NaN/timeout
+  poisons that harvest block, backs off, and caps trains per hour so a growing
+  mismatch log cannot schedule a from-scratch run every 30s. Gate-fail keeps
+  rows for a bounded retry, then poisons. Re-appended questions are skipped.
+- Status file `output/autotrainer_status.json` is shown in App (`/api/autotrainer`).
+  Viewer mmap of promoted weights is safe; chat generate still needs a process
+  restart. Do not `--resume` v7 into a harvest mix.
+
 ## 0.0.8
 
 One **App**, related cabinet follow-ups, and a **pick-a-neuron** weight view.

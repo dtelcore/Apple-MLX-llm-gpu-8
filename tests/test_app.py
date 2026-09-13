@@ -147,6 +147,26 @@ class AppShellTests(unittest.TestCase):
             self.assertEqual(argv[0], sys.executable)
             self.assertIn("--checkpoint", argv)
 
+    def test_autotrainer_status_endpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            status = root / "autotrainer_status.json"
+            status.write_text(
+                json.dumps({
+                    "state": "promoted",
+                    "needs_chat_restart": True,
+                    "checkpoint": "output/checkpoints/daemon_cycle_0001/best",
+                }),
+                encoding="utf-8",
+            )
+            app = create_app(root=root, models_root=root, autotrainer_status=status)
+            client = app.test_client()
+            out = client.get("/api/autotrainer")
+            self.assertEqual(out.status_code, 200)
+            body = out.get_json()
+            self.assertTrue(body["needs_chat_restart"])
+            self.assertEqual(body["state"], "promoted")
+
 
 if __name__ == "__main__":
     unittest.main()

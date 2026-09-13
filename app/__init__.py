@@ -6,6 +6,7 @@ weights.npz. Switching models restarts this process — no second net.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -18,7 +19,7 @@ from flask import Flask, jsonify, render_template, request
 from app.models import list_models, resolve_model
 from app.npzviewer import create_blueprint as viewer_blueprint
 from app.webui import create_blueprint as chat_blueprint
-from paths import OUTPUT_CHECKPOINTS, PROJECT_ROOT
+from paths import OUTPUT_CHECKPOINTS, OUTPUT_ROOT, PROJECT_ROOT
 
 _APP_DIR = Path(__file__).resolve().parent
 _APP_SCRIPT = PROJECT_ROOT / "App.py"
@@ -33,9 +34,16 @@ class AppState:
 
 def load_chat_session(args: Namespace):
     from training.chat_session import ChatSession
+    from training.unguided.supervisor import write_metal_holder
 
     args._entry = getattr(args, "_entry", None) or "app"
-    return ChatSession.from_args(args, configure_logging=True)
+    session = ChatSession.from_args(args, configure_logging=True)
+    write_metal_holder(
+        OUTPUT_ROOT / "metal_holder.json",
+        holder="app",
+        checkpoint=str(getattr(args, "checkpoint", "") or ""),
+    )
+    return session
 
 
 def restart_argv(args: Namespace, checkpoint: str, facts: str) -> list:
@@ -95,6 +103,7 @@ def create_app(
     models_root: Optional[Path] = None,
     load_session: Optional[Callable] = None,
     restart_fn: Optional[Callable] = None,
+    autotrainer_status: Optional[Path] = None,
 ) -> Flask:
     state = AppState()
     state.session = session
@@ -122,6 +131,7 @@ def create_app(
     catalog = Path(models_root) if models_root is not None else OUTPUT_CHECKPOINTS
     app.config["APP_STATE"] = state
     app.config["MODELS_ROOT"] = catalog
+    app.config["AUTOTRAINER_STATUS"] = Path(autotrainer_status) if autotrainer_status is not None else OUTPUT_ROOT / "autotrainer_status.json"
     app.url_map.strict_slashes = False
 
     def get_session():
@@ -204,6 +214,24 @@ def create_app(
         restarter = restart_fn or _default_restart
         restarter(argv)
         return jsonify({"ok": True, "loaded": False, "restart": True, "model": model, "argv": argv})
+
+    @app.get("/api/autotrainer")
+    def api_autotrainer():
+        path = Path(app.config["AUTOTRAINER_STATUS"])
+        if not path.is_file():
+            return jsonify({
+                "state": "idle",
+                "needs_chat_restart": False,
+                "checkpoint": "",
+                "weights": "",
+            })
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return jsonify({"state": "unknown", "needs_chat_restart": False})
+        if not isinstance(data, dict):
+            return jsonify({"state": "unknown", "needs_chat_restart": False})
+        return jsonify(data)
 
     return app
 

@@ -91,7 +91,7 @@ from training.quality import (
 from version import __version__
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="NumPy + PyCUDA GPT training loop")
     cli_common.add_config_arg(parser)
     cli_common.add_checkpoint_arg(parser)
@@ -142,7 +142,7 @@ def parse_args() -> argparse.Namespace:
         help="After training, render loss/metrics + honest loss-trajectory charts from output/logs/training.log "
              "and save them under output/logs/ (see training_log_plotter.py, loss_landscape_plotter.py)",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def build_tokenizer_and_config(config: dict, args: Optional[argparse.Namespace] = None) -> tuple:
