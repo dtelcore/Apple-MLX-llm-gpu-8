@@ -7,187 +7,396 @@
   <style>
     :root {
       --bg: #0b0b0f;
+      --bar: #111217;
       --panel: #18181f;
+      --panel-2: #1d1d26;
       --border: #2a2a33;
       --text: #ececf1;
       --muted: #9a9aa8;
       --accent: #8b5cf6;
       --loss: #4C9BE8;
       --tok: #56C4A0;
-      --vol: #F28B5A;
+      --ppl: #B57BED;
+      --val: #F28B5A;
+      --live: #34d399;
+      --down: #34d399;
+      --up: #f87171;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
-    .wrap { padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 12px; min-height: 100%; }
-    header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    h1 { font-size: 15px; margin: 0; font-weight: 650; }
-    select, button { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
-    .stats { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); }
-    .stats strong { color: var(--text); font-weight: 650; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px; }
-    .card h2 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
-    canvas { width: 100%; height: 220px; display: block; }
-    .wide { grid-column: 1 / -1; }
+    .wrap { min-height: 100%; padding: 16px 18px 24px; display: flex; flex-direction: column; gap: 14px; }
+    header.top {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+      background: var(--bar); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px;
+    }
+    header.top h1 { font-size: 16px; margin: 0; font-weight: 650; }
+    .badge {
+      font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+      border-radius: 999px; padding: 3px 8px; border: 1px solid var(--border); color: var(--muted);
+    }
+    .badge.live { color: #052e1a; background: var(--live); border-color: var(--live); }
+    select, button {
+      font: inherit; background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+    }
+    select { min-width: 240px; max-width: 46vw; }
+    .follow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+    .note { font-size: 12px; color: var(--muted); margin-left: auto; }
+    .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+    .kpi {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+    }
+    .kpi .k { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+    .kpi .v { font-size: 22px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .kpi .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .kpi .v.down { color: var(--down); }
+    .kpi .v.up { color: var(--up); }
+    .bar { height: 6px; background: #111217; border-radius: 99px; overflow: hidden; margin-top: 8px; }
+    .bar > i { display: block; height: 100%; background: var(--accent); width: 0; }
+    .grid { display: grid; grid-template-columns: 1.4fr .9fr; gap: 12px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; min-width: 0; }
+    .card h2 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; }
+    .card h2 span { color: var(--text); font-variant-numeric: tabular-nums; }
+    .plot { position: relative; height: 260px; }
+    .plot.tall { height: 220px; }
+    canvas { width: 100%; height: 100%; display: block; }
+    .tip {
+      position: absolute; pointer-events: none; display: none;
+      background: #111217; border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 8px; font-size: 11px; color: var(--text); z-index: 2; white-space: nowrap;
+    }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); }
-    .note { font-size: 11px; color: var(--muted); }
-    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    th { color: var(--muted); font-weight: 600; }
+    td, th { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--border); }
+    .act { font-weight: 650; }
+    .act.promote { color: var(--live); }
+    .act.abort_spike, .act.abort_remix { color: var(--up); }
+    .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
+    @media (max-width: 1100px) {
+      .kpis { grid-template-columns: repeat(3, 1fr); }
+      .grid, .grid-3 { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <header>
+    <header class="top">
       <h1>Train monitor</h1>
-      <label for="log">Log</label>
+      <span class="badge" id="live">idle</span>
+      <label class="follow" for="log">Run</label>
       <select id="log"></select>
-      <span class="note">Host read of training logs. No Metal. Safe beside an unguided run.</span>
+      <label class="follow"><input type="checkbox" id="follow" checked /> Follow live unguided</label>
+      <span class="note" id="meta">Host read only · no Metal</span>
     </header>
-    <div class="stats" id="stats">Waiting for log lines…</div>
+    <div class="kpis" id="kpis">
+      <div class="kpi"><div class="k">Step</div><div class="v" id="k-step">—</div><div class="s" id="k-step-s">waiting</div><div class="bar"><i id="k-bar"></i></div></div>
+      <div class="kpi"><div class="k">Loss</div><div class="v" id="k-loss">—</div><div class="s" id="k-loss-s">vs start / last</div></div>
+      <div class="kpi"><div class="k">Perplexity</div><div class="v" id="k-ppl">—</div><div class="s">from train loss</div></div>
+      <div class="kpi"><div class="k">tok/s</div><div class="v" id="k-tok">—</div><div class="s" id="k-tok-s">throughput</div></div>
+      <div class="kpi"><div class="k">Val loss</div><div class="v" id="k-val">—</div><div class="s">last eval</div></div>
+      <div class="kpi"><div class="k">LR / grad</div><div class="v" id="k-lr">—</div><div class="s" id="k-gn">—</div></div>
+    </div>
     <div class="grid">
       <div class="card">
-        <h2>Loss vs step</h2>
-        <canvas id="loss" width="640" height="220"></canvas>
+        <h2>Loss vs step <span id="leg-loss"></span></h2>
+        <div class="plot"><canvas id="loss"></canvas><div class="tip" id="tip-loss"></div></div>
       </div>
       <div class="card">
-        <h2>tok/s vs step</h2>
-        <canvas id="tok" width="640" height="220"></canvas>
+        <h2>tok/s <span id="leg-tok"></span></h2>
+        <div class="plot"><canvas id="tok"></canvas><div class="tip" id="tip-tok"></div></div>
       </div>
-      <div class="card wide">
-        <h2>Loss landscape — step × volatility, color = loss</h2>
-        <canvas id="land" width="960" height="240"></canvas>
+    </div>
+    <div class="grid-3">
+      <div class="card">
+        <h2>Perplexity <span id="leg-ppl"></span></h2>
+        <div class="plot tall"><canvas id="ppl"></canvas><div class="tip" id="tip-ppl"></div></div>
       </div>
-      <div class="card wide">
-        <h2>Decisions</h2>
-        <table>
-          <thead><tr><th>step</th><th>action</th><th>reason</th><th>val</th></tr></thead>
-          <tbody id="decisions"></tbody>
-        </table>
+      <div class="card">
+        <h2>Landscape — step × volatility, color = loss</h2>
+        <div class="plot tall"><canvas id="land"></canvas><div class="tip" id="tip-land"></div></div>
       </div>
+    </div>
+    <div class="card">
+      <h2>Decisions</h2>
+      <div id="dec-empty" class="empty">No decide() rows yet — they appear at each eval_every.</div>
+      <table id="dec-table" hidden>
+        <thead><tr><th>step</th><th>action</th><th>reason</th><th>val</th><th>cabinet</th></tr></thead>
+        <tbody id="decisions"></tbody>
+      </table>
     </div>
   </div>
   <script>
     const apiBase = {{ api_base|default('', true)|tojson }};
     const logEl = document.getElementById("log");
-    const stats = document.getElementById("stats");
-    const tbody = document.getElementById("decisions");
+    const followEl = document.getElementById("follow");
+    const charts = {};
 
-    function num(v) { return (v == null || Number.isNaN(v)) ? "—" : Number(v).toPrecision(4); }
+    function num(v, d) {
+      if (v == null || Number.isNaN(Number(v))) return "—";
+      const n = Number(v);
+      if (Math.abs(n) >= 1000) return n.toFixed(0);
+      if (Math.abs(n) >= 10) return n.toFixed(d == null ? 2 : d);
+      return n.toPrecision(4);
+    }
+    function signed(v) {
+      if (v == null || Number.isNaN(Number(v))) return "—";
+      const n = Number(v);
+      const s = (n > 0 ? "+" : "") + num(n);
+      return s;
+    }
+    function ageLabel(s) {
+      if (s == null) return "";
+      if (s < 5) return "just now";
+      if (s < 60) return Math.round(s) + "s ago";
+      if (s < 3600) return Math.round(s / 60) + "m ago";
+      return Math.round(s / 3600) + "h ago";
+    }
 
-    function drawLine(canvas, xs, ys, color) {
+    function fit(canvas) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(120, rect.width);
+      const h = Math.max(80, rect.height);
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
       const ctx = canvas.getContext("2d");
-      const w = canvas.width, h = canvas.height;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, w, h };
+    }
+
+    function drawLine(canvas, xs, ys, color, tip, extra) {
+      const { ctx, w, h } = fit(canvas);
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "#111217";
       ctx.fillRect(0, 0, w, h);
       const pts = [];
       for (let i = 0; i < xs.length; i++) {
         if (ys[i] == null || Number.isNaN(ys[i])) continue;
-        pts.push([xs[i], ys[i]]);
+        pts.push({ x: xs[i], y: ys[i], i });
       }
-      if (pts.length < 2) return;
-      let minX = pts[0][0], maxX = pts[0][0], minY = pts[0][1], maxY = pts[0][1];
-      for (const [x, y] of pts) {
-        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      const extras = [];
+      if (extra && extra.xs) {
+        for (let i = 0; i < extra.xs.length; i++) {
+          const y = extra.ys[i];
+          if (y == null) continue;
+          extras.push({ x: extra.xs[i], y });
+        }
+      }
+      charts[canvas.id] = { pts, extras, color, pad: { l: 48, r: 12, t: 12, b: 26 }, w, h, tip };
+      if (pts.length < 2 && extras.length < 1) return;
+      let minX = pts.length ? pts[0].x : extras[0].x;
+      let maxX = minX, minY = pts.length ? pts[0].y : extras[0].y, maxY = minY;
+      for (const p of pts.concat(extras)) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
       }
       if (maxX === minX) maxX = minX + 1;
-      if (maxY === minY) maxY = minY + 1e-6;
-      const l = 36, r = 10, t = 8, b = 22;
+      const span = maxY - minY || Math.abs(maxY) * 0.05 || 1e-6;
+      minY -= span * 0.08; maxY += span * 0.08;
+      const pad = charts[canvas.id].pad;
+      const X = (x) => pad.l + ((x - minX) / (maxX - minX)) * (w - pad.l - pad.r);
+      const Y = (y) => h - pad.b - ((y - minY) / (maxY - minY)) * (h - pad.t - pad.b);
+      charts[canvas.id].map = { X, Y, minX, maxX, minY, maxY };
       ctx.strokeStyle = "#2a2a33";
-      ctx.beginPath();
-      ctx.moveTo(l, t); ctx.lineTo(l, h - b); ctx.lineTo(w - r, h - b);
-      ctx.stroke();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      pts.forEach(([x, y], i) => {
-        const px = l + ((x - minX) / (maxX - minX)) * (w - l - r);
-        const py = h - b - ((y - minY) / (maxY - minY)) * (h - t - b);
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      });
-      ctx.stroke();
-      ctx.fillStyle = "#9a9aa8";
+      ctx.lineWidth = 1;
       ctx.font = "11px ui-sans-serif";
-      ctx.fillText(String(minX), l, h - 6);
-      ctx.fillText(String(maxX), w - 48, h - 6);
+      ctx.fillStyle = "#9a9aa8";
+      for (let t = 0; t < 4; t++) {
+        const yv = minY + (maxY - minY) * (t / 3);
+        const py = Y(yv);
+        ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(w - pad.r, py); ctx.stroke();
+        ctx.fillText(num(yv), 4, py + 4);
+      }
+      ctx.fillText(String(minX), pad.l, h - 8);
+      ctx.fillText(String(maxX), w - 40, h - 8);
+      if (pts.length >= 2) {
+        const g = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
+        g.addColorStop(0, color + "55");
+        g.addColorStop(1, color + "00");
+        ctx.beginPath();
+        pts.forEach((p, i) => { const px = X(p.x), py = Y(p.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+        ctx.lineTo(X(pts[pts.length - 1].x), h - pad.b);
+        ctx.lineTo(X(pts[0].x), h - pad.b);
+        ctx.closePath();
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.beginPath();
+        pts.forEach((p, i) => { const px = X(p.x), py = Y(p.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      extras.forEach((p) => {
+        ctx.fillStyle = extra.color || "#F28B5A";
+        ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 3.2, 0, Math.PI * 2); ctx.fill();
+      });
     }
 
     function drawLand(canvas, xs, vol, loss) {
-      const ctx = canvas.getContext("2d");
-      const w = canvas.width, h = canvas.height;
+      const { ctx, w, h } = fit(canvas);
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "#111217";
       ctx.fillRect(0, 0, w, h);
       const pts = [];
       for (let i = 0; i < xs.length; i++) {
         if (vol[i] == null || loss[i] == null) continue;
-        pts.push([xs[i], vol[i], loss[i]]);
+        pts.push({ x: xs[i], v: vol[i], lo: loss[i] });
       }
+      charts[canvas.id] = { pts, pad: { l: 48, r: 12, t: 12, b: 26 }, w, h, tip: document.getElementById("tip-land"), land: true };
       if (!pts.length) return;
-      let minX = pts[0][0], maxX = pts[0][0], minV = pts[0][1], maxV = pts[0][1];
-      let minL = pts[0][2], maxL = pts[0][2];
-      for (const p of pts) {
-        minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
-        minV = Math.min(minV, p[1]); maxV = Math.max(maxV, p[1]);
-        minL = Math.min(minL, p[2]); maxL = Math.max(maxL, p[2]);
-      }
+      let minX = pts[0].x, maxX = minX, minV = pts[0].v, maxV = minV, minL = pts[0].lo, maxL = minL;
+      pts.forEach((p) => {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minV = Math.min(minV, p.v); maxV = Math.max(maxV, p.v);
+        minL = Math.min(minL, p.lo); maxL = Math.max(maxL, p.lo);
+      });
       if (maxX === minX) maxX += 1;
       if (maxV === minV) maxV += 1e-6;
       if (maxL === minL) maxL += 1e-6;
-      const l = 36, r = 10, t = 8, b = 22;
-      pts.forEach(([x, v, lo]) => {
-        const tL = (lo - minL) / (maxL - minL);
-        const px = l + ((x - minX) / (maxX - minX)) * (w - l - r);
-        const py = h - b - ((v - minV) / (maxV - minV)) * (h - t - b);
-        ctx.fillStyle = `hsl(${220 - tL * 80} 70% 60%)`;
-        ctx.beginPath();
-        ctx.arc(px, py, 2.4, 0, Math.PI * 2);
-        ctx.fill();
+      const pad = charts[canvas.id].pad;
+      const X = (x) => pad.l + ((x - minX) / (maxX - minX)) * (w - pad.l - pad.r);
+      const Y = (v) => h - pad.b - ((v - minV) / (maxV - minV)) * (h - pad.t - pad.b);
+      charts[canvas.id].map = { X, Y, minX, maxX };
+      ctx.strokeStyle = "#2a2a33";
+      ctx.fillStyle = "#9a9aa8";
+      ctx.font = "11px ui-sans-serif";
+      for (let t = 0; t < 4; t++) {
+        const yv = minV + (maxV - minV) * (t / 3);
+        const py = Y(yv);
+        ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(w - pad.r, py); ctx.stroke();
+        ctx.fillText(num(yv), 4, py + 4);
+      }
+      ctx.fillText("vol", 6, 14);
+      ctx.fillText(String(minX), pad.l, h - 8);
+      ctx.fillText(String(maxX), w - 40, h - 8);
+      ctx.beginPath();
+      pts.forEach((p, i) => { const px = X(p.x), py = Y(p.v); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+      ctx.strokeStyle = "#2a2a33";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      pts.forEach((p) => {
+        const tL = (p.lo - minL) / (maxL - minL);
+        ctx.fillStyle = `hsl(${210 - tL * 90} 75% 62%)`;
+        ctx.beginPath(); ctx.arc(X(p.x), Y(p.v), 3.4, 0, Math.PI * 2); ctx.fill();
       });
+    }
+
+    function bindTip(canvas) {
+      const tip = canvas.parentElement.querySelector(".tip");
+      canvas.addEventListener("mousemove", (ev) => {
+        const rec = charts[canvas.id];
+        if (!rec || !rec.pts || !rec.pts.length || !rec.map) { tip.style.display = "none"; return; }
+        const rect = canvas.getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        let best = null, bestD = 1e9;
+        rec.pts.forEach((p) => {
+          const px = rec.land ? rec.map.X(p.x) : rec.map.X(p.x);
+          const d = Math.abs(px - x);
+          if (d < bestD) { bestD = d; best = p; }
+        });
+        if (!best || bestD > 28) { tip.style.display = "none"; return; }
+        tip.style.display = "block";
+        tip.style.left = Math.min(rect.width - 120, rec.map.X(best.x)) + "px";
+        tip.style.top = "8px";
+        if (rec.land) tip.textContent = "step " + best.x + "  vol " + num(best.v) + "  loss " + num(best.lo);
+        else tip.textContent = "step " + best.x + "  " + num(best.y);
+      });
+      canvas.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+    }
+    ["loss", "tok", "ppl", "land"].forEach((id) => bindTip(document.getElementById(id)));
+
+    function setText(id, text, cls) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      if (cls !== undefined) el.className = "v" + (cls ? " " + cls : "");
     }
 
     async function loadLogs() {
       const res = await fetch(apiBase + "/api/logs");
       const data = await res.json();
-      const cur = logEl.value;
+      const rows = data.logs || [];
+      const keep = logEl.value;
       logEl.innerHTML = "";
-      for (const row of data.logs || []) {
+      for (const row of rows) {
         const opt = document.createElement("option");
-        opt.value = row.path;
-        opt.textContent = row.name;
+        opt.value = row.name;
+        const tag = row.live ? " · live" : row.kind === "unguided" ? " · unguided" : "";
+        opt.textContent = (row.label || row.name) + tag;
         logEl.appendChild(opt);
       }
-      if (cur) logEl.value = cur;
+      if (followEl.checked && data.preferred) logEl.value = data.preferred;
+      else if (keep) logEl.value = keep;
+      else if (data.preferred) logEl.value = data.preferred;
+      return rows;
     }
 
     async function tick() {
-      const q = logEl.value ? ("?log=" + encodeURIComponent(logEl.value)) : "";
+      const rows = await loadLogs();
+      const chosen = logEl.value;
+      const row = rows.find((r) => r.name === chosen) || rows[0];
+      const live = !!(row && row.live);
+      const liveEl = document.getElementById("live");
+      liveEl.textContent = live ? "live" : "idle";
+      liveEl.className = "badge" + (live ? " live" : "");
+      document.getElementById("meta").textContent =
+        (row ? (row.name + " · " + ageLabel(row.age_s)) : "no logs") + " · host read, no Metal";
+
+      const q = chosen ? ("?log=" + encodeURIComponent(chosen)) : "";
       const res = await fetch(apiBase + "/api/series" + q);
       const data = await res.json();
       const last = data.last || {};
-      stats.innerHTML =
-        "<span>step <strong>" + (last.step || 0) + "</strong> / " + (last.total || "—") + "</span>" +
-        "<span>loss <strong>" + num(last.loss) + "</strong></span>" +
-        "<span>ppl <strong>" + num(last.ppl) + "</strong></span>" +
-        "<span>tok/s <strong>" + num(last.tok_s) + "</strong></span>" +
-        "<span>val <strong>" + num(last.val_loss) + "</strong></span>" +
-        "<span>" + (data.log || "") + "</span>";
-      drawLine(document.getElementById("loss"), data.steps || [], data.loss || [], "#4C9BE8");
+      const total = last.total || data.total_steps || 0;
+      const step = last.step || 0;
+      const pct = total ? Math.min(100, (step / total) * 100) : 0;
+      setText("k-step", step ? (step + " / " + (total || "—")) : "—");
+      document.getElementById("k-step-s").textContent = (last.n_points || (data.steps || []).length) + " samples";
+      document.getElementById("k-bar").style.width = pct + "%";
+      const d = last.dloss;
+      setText("k-loss", num(last.loss), d == null ? "" : (d <= 0 ? "down" : "up"));
+      document.getElementById("k-loss-s").textContent =
+        "Δstart " + signed(last.delta_loss) + "  Δstep " + signed(last.dloss);
+      setText("k-ppl", num(last.ppl));
+      setText("k-tok", num(last.tok_s, 0));
+      document.getElementById("k-tok-s").textContent = last.eta_s != null ? ("eta " + num(last.eta_s, 0) + "s") : "throughput";
+      setText("k-val", num(last.val_loss));
+      setText("k-lr", last.lr != null ? Number(last.lr).toExponential(2) : "—");
+      document.getElementById("k-gn").textContent = last.grad_norm != null ? ("grad " + num(last.grad_norm)) : "—";
+      document.getElementById("leg-loss").textContent = num(last.loss);
+      document.getElementById("leg-tok").textContent = num(last.tok_s, 0);
+      document.getElementById("leg-ppl").textContent = num(last.ppl);
+
+      drawLine(document.getElementById("loss"), data.steps || [], data.loss || [], "#4C9BE8",
+        document.getElementById("tip-loss"), { xs: data.steps || [], ys: data.val_loss || [], color: "#F28B5A" });
       drawLine(document.getElementById("tok"), data.steps || [], data.tok_s || [], "#56C4A0");
+      drawLine(document.getElementById("ppl"), data.steps || [], data.ppl || [], "#B57BED");
       drawLand(document.getElementById("land"), data.steps || [], data.volatility || [], data.loss || []);
+
+      const recs = data.decisions || [];
+      const empty = document.getElementById("dec-empty");
+      const table = document.getElementById("dec-table");
+      const tbody = document.getElementById("decisions");
       tbody.innerHTML = "";
-      for (const rec of (data.decisions || []).slice(-12).reverse()) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + (rec.step ?? "") + "</td><td>" + (rec.action ?? "") +
-          "</td><td>" + (rec.reason ?? "") + "</td><td>" + num(rec.val_loss) + "</td>";
-        tbody.appendChild(tr);
+      if (!recs.length) {
+        empty.hidden = false; table.hidden = true;
+      } else {
+        empty.hidden = true; table.hidden = false;
+        recs.slice(-16).reverse().forEach((rec) => {
+          const tr = document.createElement("tr");
+          const act = rec.action || "";
+          tr.innerHTML = "<td>" + (rec.step ?? "") + "</td><td class='act " + act + "'>" + act +
+            "</td><td>" + (rec.reason ?? "") + "</td><td>" + num(rec.val_loss) +
+            "</td><td>" + num(rec.cabinet_exact_match) + "</td>";
+          tbody.appendChild(tr);
+        });
       }
     }
 
-    logEl.addEventListener("change", tick);
-    loadLogs().then(tick);
-    setInterval(() => { loadLogs().then(tick); }, 2000);
+    logEl.addEventListener("change", () => { followEl.checked = false; tick(); });
+    followEl.addEventListener("change", tick);
+    window.addEventListener("resize", () => tick());
+    tick();
+    setInterval(tick, 2000);
   </script>
 </body>
 </html>

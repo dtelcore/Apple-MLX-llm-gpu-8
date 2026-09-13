@@ -1,0 +1,6 @@
+{
+  "vocab_fingerprint": "4bb0448fc98b2a32",
+  "dataset_path": "data/chat_facts_v7.jsonl",
+  "policy_recipe": "setup/chat_facts_v7_config.json",
+  "run_name": "Unguarded-Initialv7-Run"
+}

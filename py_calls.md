@@ -190,6 +190,9 @@ python unguided_trainer.py --config ... --policy ... --unguarded
 | `--max-steps` | int | policy | Override |
 | `--eval-every` | int | policy | Override |
 | `--log-every` | int | policy (`10`) | `[train]` line cadence. Policy key `log_every`. |
+| `--name` | str | policy | Fresh basename: `output/runs/<name>` + `output/checkpoints/<name>` |
+| `--run-name` | str | policy | `output/runs/<name>` only |
+| `--checkpoint-dir` | str | policy | Weights dir (must have no `weights.npz`) |
 
 Stop App first. First Metal check is `--dry-run`, then a short run into a **new** dir.
 

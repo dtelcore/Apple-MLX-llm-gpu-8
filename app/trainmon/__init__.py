@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -75,7 +76,30 @@ def _latest_from_text(log_path: Path) -> dict:
             last["tok_s"] = tok
         if row.get("val_loss") is not None:
             last["val_loss"] = row["val_loss"]
+        if row.get("lr") is not None:
+            last["lr"] = row["lr"]
+        if row.get("grad_norm") is not None:
+            last["grad_norm"] = row["grad_norm"]
+        if row.get("eta_s") is not None:
+            last["eta_s"] = row["eta_s"]
     return last
+
+
+def _kind(name: str) -> str:
+    if name.startswith("unguided_"):
+        return "unguided"
+    if name.startswith("training"):
+        return "training"
+    return "other"
+
+
+def _pretty_log_name(name: str) -> str:
+    stem = Path(name).stem
+    if stem.startswith("unguided_"):
+        return stem[len("unguided_") :]
+    if stem.startswith("training_"):
+        return stem[len("training_") :]
+    return stem
 
 
 def _rolling_std(values: List[Optional[float]], window: int = 8) -> List[Optional[float]]:
@@ -107,17 +131,31 @@ def _run_name_from_log(log_path: Path) -> str:
 def _list_logs(log_dir: Path) -> List[dict]:
     if not log_dir.is_dir():
         return []
+    now = time.time()
     rows = []
-    for path in sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in log_dir.glob("*.log"):
         st = path.stat()
+        kind = _kind(path.name)
+        age = max(0.0, now - st.st_mtime)
+        live = age < 60
         rows.append(
             {
                 "name": path.name,
                 "path": path.name,
+                "label": _pretty_log_name(path.name),
+                "kind": kind,
+                "live": live,
+                "age_s": age,
                 "bytes": st.st_size,
                 "mtime": st.st_mtime,
             }
         )
+    rows.sort(
+        key=lambda r: (
+            0 if r["live"] and r["kind"] == "unguided" else 1 if r["kind"] == "unguided" else 2,
+            -r["mtime"],
+        )
+    )
     return rows
 
 
@@ -241,9 +279,17 @@ def series_payload(
             if parsed is not None:
                 last["val_loss"] = parsed
                 break
+    first_loss = next((v for v in loss if v is not None), None)
+    prev_loss = next((v for v in reversed(loss[:-1]) if v is not None), None) if len(loss) > 1 else None
+    if last.get("loss") is not None and first_loss is not None:
+        last["delta_loss"] = last["loss"] - first_loss
+    if last.get("loss") is not None and prev_loss is not None:
+        last["dloss"] = last["loss"] - prev_loss
+    last["n_points"] = len(run.steps)
     return {
         "name": run.name,
         "log": log_path.name,
+        "label": _pretty_log_name(log_path.name),
         "steps": run.steps,
         "loss": loss,
         "ppl": ppl,
@@ -274,7 +320,11 @@ def create_blueprint(
 
     @bp.get("/api/logs")
     def api_logs():
-        return jsonify({"logs": _list_logs(logs)})
+        available = _list_logs(logs)
+        return jsonify({
+            "logs": available,
+            "preferred": available[0]["name"] if available else "",
+        })
 
     @bp.get("/api/series")
     def api_series():

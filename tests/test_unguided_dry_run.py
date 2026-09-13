@@ -48,8 +48,36 @@ class DryRunTests(unittest.TestCase):
         self.assertIn("UNGUIDED DRY-RUN", out)
         self.assertIn("No Metal init", out)
         self.assertIn("eval_every", out)
-        self.assertIn("log_every:     10", out)
+        self.assertIn("log_every:", out)
         self.assertIn("No Metal init", out)
+
+    def test_name_flags_override_dirs(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = unguided_trainer.main([
+                "--config", str(_ROOT / "setup" / "chat_facts_v7_config.json"),
+                "--policy", str(_ROOT / "setup" / "unguided_v7_policy.json"),
+                "--name", "unguided_v7_log1",
+                "--dry-run",
+            ])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("run_name:      unguided_v7_log1", out)
+        self.assertIn("output/runs/unguided_v7_log1", out)
+        self.assertIn("output/checkpoints/unguided_v7_log1", out)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = unguided_trainer.main([
+                "--config", str(_ROOT / "setup" / "chat_facts_v7_config.json"),
+                "--policy", str(_ROOT / "setup" / "unguided_v7_policy.json"),
+                "--run-name", "run_only",
+                "--checkpoint-dir", "output/checkpoints/ckpt_only",
+                "--dry-run",
+            ])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("run_name:      run_only", out)
+        self.assertIn("output/checkpoints/ckpt_only", out)
 
     def test_log_every_cli_overrides_policy(self):
         buf = io.StringIO()

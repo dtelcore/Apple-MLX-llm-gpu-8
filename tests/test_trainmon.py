@@ -106,6 +106,24 @@ class TrainmonAppTests(unittest.TestCase):
             self.assertEqual(body["steps"], [10, 20, 30])
             self.assertAlmostEqual(body["tok_s"][0], 120.0)
 
+    def test_prefers_live_unguided_over_training_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            logs.mkdir()
+            old = logs / "training.log"
+            _write_train_log(old)
+            live = logs / "unguided_Unguarded-Initialv7-Run.log"
+            _write_train_log(live)
+            # Make the aggregate log look newer so mtime-only pick would be wrong.
+            old.write_text(old.read_text(encoding="utf-8") + "[train] step=40/500 loss=1.0 ppl=2 tok_s=1\n", encoding="utf-8")
+            app = create_trainmon(log_dir=logs)
+            client = app.test_client()
+            listing = client.get("/api/logs").get_json()
+            self.assertEqual(listing["preferred"], "unguided_Unguarded-Initialv7-Run.log")
+            self.assertEqual(listing["logs"][0]["kind"], "unguided")
+            series = client.get("/api/series").get_json()
+            self.assertEqual(series["log"], "unguided_Unguarded-Initialv7-Run.log")
+
     def test_rejects_path_outside_log_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs = Path(tmp) / "logs"
@@ -134,6 +152,7 @@ class AppTrainTabTests(unittest.TestCase):
             pane = client.get("/train/")
             self.assertEqual(pane.status_code, 200)
             self.assertIn(b"Train monitor", pane.data)
+            self.assertIn(b"Follow live", pane.data)
             series = client.get("/train/api/series", query_string={"log": "live.log"})
             self.assertEqual(series.status_code, 200)
             self.assertEqual(series.get_json()["last"]["step"], 30)

@@ -84,7 +84,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=None, help="Override policy max_steps")
     parser.add_argument("--eval-every", type=int, default=None, help="Override policy eval_every")
     parser.add_argument("--log-every", type=int, default=None, help="Override policy log_every")
+    parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Fresh run + checkpoint basename (output/runs/<name>, output/checkpoints/<name>)",
+    )
+    parser.add_argument("--run-name", type=str, default=None, help="Override policy run_name (output/runs/<name>)")
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="Override policy checkpoint_dir (must be empty / no weights.npz)",
+    )
     return parser.parse_args(argv)
+
+
+def _safe_basename(raw: str, flag: str) -> str:
+    text = str(raw).strip()
+    if not text or text in {".", ".."} or "/" in text or "\\" in text:
+        raise SystemExit(f"{flag} must be a single directory name, not a path: {raw!r}")
+    return text
+
+
+def _apply_location_overrides(args: argparse.Namespace, policy: dict) -> None:
+    if args.name:
+        name = _safe_basename(args.name, "--name")
+        policy["run_name"] = name
+        policy["checkpoint_dir"] = f"output/checkpoints/{name}"
+    if args.run_name:
+        policy["run_name"] = _safe_basename(args.run_name, "--run-name")
+    if args.checkpoint_dir:
+        policy["checkpoint_dir"] = str(args.checkpoint_dir).strip()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         policy["log_every"] = args.log_every
     if args.unguarded:
         policy["unguarded"] = True
+    _apply_location_overrides(args, policy)
 
     run_name = policy.get("run_name", "unguided_v7")
     run_dir = Path("output/runs") / run_name
@@ -125,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"recipe:        {config_path}")
         print(f"policy:        {policy_path}")
         print(f"run_name:      {run_name}")
+        print(f"run_dir:       {run_dir}")
         print(f"checkpoint:    {checkpoint_dir}")
         print(f"dataset:       {(recipe.get('dataset') or {}).get('path')}")
         print(
