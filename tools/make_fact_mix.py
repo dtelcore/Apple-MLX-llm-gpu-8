@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
 from tools.make_chat_trainset import qa_record, topic_from_fact, wrap_native
 from tools.wikidata_to_facts import drop_conflicts, expand_linked_pairs
 from tools.wikidata_to_facts2 import fold_label
-from training.cabinet_index import _pairs_from_jsonl, normalize_question
+from training.cabinet_index import _pairs_from_jsonl, drop_quarantined, normalize_question
 from training.chat_format import ASSISTANT_PREFIX, USER_PREFIX
 
 _NEONICS_ASSISTANT = (
@@ -208,17 +208,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     facts_dir = ROOT / "data" / "facts"
     if not bool(getattr(args, "user_only", False)) and facts_dir.is_dir():
         extra_facts = list(facts_dir.glob("*.txt"))
-    user = load_user_facts([Path(args.user_facts), *extra_facts])
+    user = drop_quarantined(load_user_facts([Path(args.user_facts), *extra_facts]))
     learned: List[Tuple[str, str]] = []
     if str(args.learned).strip():
-        learned = load_learned_extras(
-            Path(args.learned),
-            existing=user,
-            max_assistant_chars=int(args.max_learned_chars),
+        learned = drop_quarantined(
+            load_learned_extras(
+                Path(args.learned),
+                existing=user,
+                max_assistant_chars=int(args.max_learned_chars),
+            )
         )
         user = list(user) + learned
     if bool(getattr(args, "linked", False)):
-        user = expand_linked_pairs(user)
+        user = drop_quarantined(expand_linked_pairs(user))
     wiki = load_wiki_core(Path(args.chat_train), max_facts=int(args.max_wiki_facts))
     pairs = build_pairs(
         user_facts=user,

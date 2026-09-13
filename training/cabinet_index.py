@@ -15,9 +15,13 @@ from pathlib import Path
 from typing import Dict, FrozenSet, Iterable, Iterator, List, Optional, Union
 
 from training.chat_format import ASSISTANT_PREFIX, USER_PREFIX, format_conversation
+from paths import DATA_DIR
 
-DEFAULT_FACTS_PATH = Path("data/chat_facts.jsonl")
+DEFAULT_FACTS_PATH = DATA_DIR / "chat_facts.jsonl"
+DEFAULT_ALIASES_PATH = DATA_DIR / "cabinet_aliases.json"
+DEFAULT_QUARANTINE_PATH = DATA_DIR / "cabinet_quarantine.json"
 RELATED_LIMIT = 5
+_ARTICLES = ("the", "a", "an")
 
 _CAPITAL_USER = re.compile(r"^what is the capital of (.+)$")
 _CAPITAL_ASST = re.compile(r"^the capital of (.+) is (.+)$")
@@ -156,6 +160,90 @@ def generate_prompt_for(user: str) -> str:
     return format_conversation([], pending_user=user, open_assistant=True)
 
 
+def entity_article_variants(entity: str) -> List[str]:
+    """Entity with and without a leading the/a/an."""
+    e = " ".join((entity or "").split()).strip(" .")
+    if not e:
+        return []
+    out: List[str] = []
+    seen = set()
+    low = e.casefold()
+    bare = e
+    for art in _ARTICLES:
+        prefix = art + " "
+        if low.startswith(prefix):
+            bare = e[len(prefix):].lstrip()
+            break
+    candidates = [bare, e]
+    for art in _ARTICLES:
+        candidates.append(f"{art} {bare}")
+    for cand in candidates:
+        cand = " ".join(cand.split())
+        if not cand:
+            continue
+        key = cand.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cand)
+    return out
+
+
+_ARTICLE_SLOT_PATTERNS = (
+    (re.compile(r"^who invented (.+)$"), "who invented {e}"),
+    (re.compile(r"^who is credited with inventing (.+)$"), "who is credited with inventing {e}"),
+    (re.compile(r"^what is the capital of (.+)$"), "what is the capital of {e}"),
+)
+
+
+def article_slot_candidates(text: str) -> List[str]:
+    """Normalized keys for inventor/capital templates with/without a leading article.
+
+    Only recognized slots. Unrelated questions such as ``What is unobtanium?``
+    yield an empty list (no fuzzy rewrite).
+    """
+    key = normalize_question(text)
+    if not key:
+        return []
+    out: List[str] = []
+    seen = set()
+    for rx, fmt in _ARTICLE_SLOT_PATTERNS:
+        m = rx.match(key)
+        if not m:
+            continue
+        for variant in entity_article_variants(m.group(1)):
+            cand = normalize_question(fmt.format(e=variant))
+            if cand and cand not in seen:
+                seen.add(cand)
+                out.append(cand)
+        break
+    return out
+
+
+def load_quarantine_keys(path: Optional[Union[str, Path]] = None) -> FrozenSet[str]:
+    """Normalized questions that must not enter the trained cabinet."""
+    src = Path(path) if path is not None else DEFAULT_QUARANTINE_PATH
+    if not src.is_file():
+        return frozenset()
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return frozenset()
+    if not isinstance(data, list):
+        return frozenset()
+    return frozenset(normalize_question(str(item)) for item in data if str(item).strip())
+
+
+def drop_quarantined(
+    pairs: Iterable[tuple],
+    keys: Optional[FrozenSet[str]] = None,
+) -> List[tuple]:
+    banned = keys if keys is not None else load_quarantine_keys()
+    if not banned:
+        return list(pairs)
+    return [(u, a) for u, a in pairs if normalize_question(u) not in banned]
+
+
 _JSONL_DECODER = json.JSONDecoder()
 
 
@@ -216,6 +304,8 @@ class CabinetIndex:
     def __init__(self, facts: Optional[Dict[str, CabinetFact]] = None):
         self._facts: Dict[str, CabinetFact] = dict(facts or {})
         self._aliases: Dict[str, CabinetFact] = {}
+        self._file_aliases: Dict[str, str] = {}
+        self._quarantine: FrozenSet[str] = frozenset()
         self._entity_facts: Dict[str, List[CabinetFact]] = defaultdict(list)
         self._fact_entities: Dict[str, FrozenSet[str]] = {}
         for fact in self._facts.values():
@@ -225,15 +315,76 @@ class CabinetIndex:
     def __len__(self) -> int:
         return len(self._facts)
 
-    def lookup(self, text: str) -> Optional[CabinetFact]:
+    def set_quarantine(self, keys: Iterable[str]) -> None:
+        self._quarantine = frozenset(normalize_question(k) for k in keys if k)
+
+    def lookup(self, text: str, *, source: Optional[str] = None) -> Optional[CabinetFact]:
         key = normalize_question(text)
         if not key:
             return None
-        return self._facts.get(key) or self._aliases.get(key)
+        fact = self._facts.get(key)
+        if fact is not None and (source is None or fact.source == source):
+            return fact
+        if source == "learned":
+            aliased = self._aliases.get(key)
+            return aliased if aliased is not None and aliased.source == "learned" else None
+        if source == "trained":
+            resolved = self.resolve_trained(text)
+            return resolved[0] if resolved else None
+        return self._aliases.get(key)
+
+    def resolve_trained(self, text: str) -> Optional[tuple]:
+        """Collision-safe trained hit: (fact, match_type) or None.
+
+        match_type is trained_exact, trained_alias, or trained_article.
+        Learned rows that occupy the same typed key do not win.
+        """
+        key = normalize_question(text)
+        if not key or key in self._quarantine:
+            return None
+        fact = self._facts.get(key)
+        if fact is not None and fact.source == "trained":
+            return fact, "trained_exact"
+
+        target = self._file_aliases.get(key)
+        if target and target not in self._quarantine:
+            fact = self._facts.get(target)
+            if fact is not None and fact.source == "trained":
+                return fact, "trained_alias"
+
+        aliased = self._aliases.get(key)
+        if aliased is not None and aliased.source == "trained":
+            return aliased, "trained_alias"
+
+        hits: Dict[str, CabinetFact] = {}
+        for cand in article_slot_candidates(text):
+            if cand in self._quarantine:
+                continue
+            found = self._facts.get(cand)
+            if found is not None and found.source == "trained":
+                hits[found.key] = found
+        if len(hits) == 1:
+            return next(iter(hits.values())), "trained_article"
+        return None
+
+    def resolve_learned(self, text: str) -> Optional[tuple]:
+        """Learned exact or in-memory topic alias. Trained keys are not returned."""
+        key = normalize_question(text)
+        if not key:
+            return None
+        fact = self._facts.get(key)
+        if fact is not None and fact.source == "learned":
+            return fact, "learned_exact"
+        aliased = self._aliases.get(key)
+        if aliased is not None and aliased.source == "learned":
+            return aliased, "learned_topic"
+        return None
 
     def add(self, user: str, assistant: str, *, source: str = "trained") -> Optional[CabinetFact]:
         key = normalize_question(user)
         if not key:
+            return None
+        if source == "trained" and key in self._quarantine:
             return None
         existing = self._facts.get(key)
         if existing is not None:
@@ -316,19 +467,52 @@ class CabinetIndex:
 
     def related_template_hits(self, text: str, extra_entities: Iterable[str] = ()) -> List[CabinetFact]:
         """Trained facts whose user is a known template for a mentioned/session entity."""
+        resolved = self.resolve_trained(text)
+        if resolved is not None:
+            return [resolved[0]]
         typed = normalize_question(text)
         if not typed:
             return []
         ents = set(self.entities_mentioned(text))
         ents.update(_bare_entity(e) for e in extra_entities if e)
+        cands = set(article_slot_candidates(text))
+        cands.add(typed)
         seen: Dict[str, CabinetFact] = {}
         for ent in ents:
-            if typed not in template_keys_for(ent):
-                continue
-            fact = self.lookup(text)
-            if fact is not None and fact.source == "trained":
-                seen[fact.key] = fact
+            for tmpl in template_keys_for(ent):
+                if tmpl not in cands:
+                    continue
+                fact = self._facts.get(tmpl)
+                if fact is not None and fact.source == "trained":
+                    seen[fact.key] = fact
         return list(seen.values())
+
+    def load_file_aliases(self, path: Optional[Union[str, Path]] = None) -> int:
+        """Load explicit trained aliases. Missing or ambiguous targets are skipped."""
+        src = Path(path) if path is not None else DEFAULT_ALIASES_PATH
+        if not src.is_file():
+            return 0
+        try:
+            raw = json.loads(src.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return 0
+        if not isinstance(raw, dict):
+            return 0
+        added = 0
+        for src_q, tgt_q in raw.items():
+            ns = normalize_question(str(src_q))
+            nt = normalize_question(str(tgt_q))
+            if not ns or not nt or nt in self._quarantine:
+                continue
+            fact = self._facts.get(nt)
+            if fact is None or fact.source != "trained":
+                continue
+            existing = self._file_aliases.get(ns)
+            if existing is not None and existing != nt:
+                continue
+            self._file_aliases[ns] = nt
+            added += 1
+        return added
 
 
 def _pairs_from_path(path: Path) -> Iterator[tuple]:
@@ -344,14 +528,24 @@ def _jsonl_line(user: str, assistant: str) -> str:
     )
 
 
-def load_cabinet(path: Union[str, Path], *, source: str = "trained") -> CabinetIndex:
+def load_cabinet(
+    path: Union[str, Path],
+    *,
+    source: str = "trained",
+    quarantine_path: Optional[Union[str, Path]] = None,
+    aliases_path: Optional[Union[str, Path]] = None,
+) -> CabinetIndex:
     """Load unique facts from JSONL (or native ``User:/Assistant:`` txt)."""
     src = Path(path)
     index = CabinetIndex()
+    if source == "trained":
+        index.set_quarantine(load_quarantine_keys(quarantine_path))
     if not src.is_file():
         raise FileNotFoundError(f"Cabinet facts not found: {src}")
     for user, assistant in _pairs_from_path(src):
         index.add(user, assistant, source=source)
+    if source == "trained":
+        index.load_file_aliases(aliases_path)
     return index
 
 
@@ -382,6 +576,9 @@ def remember(
     """Index a new Q&A and append JSONL. Duplicates and conflicts do not write."""
     if not (user or "").strip() or not (assistant or "").strip():
         return None
+    trained = index.resolve_trained(user)
+    if trained is not None:
+        return trained[0]
     existing = index.lookup(user)
     if existing is not None:
         return existing

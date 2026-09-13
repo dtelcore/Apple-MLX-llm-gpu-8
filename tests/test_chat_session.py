@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -17,11 +19,14 @@ from training.chat_session import ChatSession, TurnResult, add_session_args
 
 
 class FakeTok:
+    def __init__(self, reply="FAKE GENERATE"):
+        self.reply = reply
+
     def encode(self, text):
         return [1, 2, 3]
 
     def decode(self, ids):
-        return "FAKE GENERATE"
+        return self.reply
 
 
 class FakeModel:
@@ -87,10 +92,17 @@ class ChatSessionTests(unittest.TestCase):
 
         cab = CabinetIndex()
         cab.add("What is the capital of France?", "The capital of France is Paris.")
-        s = _session(model=GenModel(), cabinet=cab, search_enabled=True)
+        s = _session(
+            model=GenModel(),
+            tokenizer=FakeTok("The capital of France is Paris."),
+            cabinet=cab,
+            search_enabled=True,
+        )
         r = s.turn("What is the capital of France?")
         self.assertEqual(r.kind, "cabinet")
         self.assertEqual(r.detail, "generate")
+        self.assertEqual(r.classification, "MATCH")
+        self.assertEqual(r.text, "The capital of France is Paris.")
         self.assertIn("france", s.last_entities)
         self.assertTrue(r.related == [] or isinstance(r.related, list))
         miss = s.turn("where is paris?")
@@ -101,11 +113,45 @@ class ChatSessionTests(unittest.TestCase):
         self.assertEqual(rel.kind, "command")
         self.assertIn("France", rel.text)
 
+    def test_generate_mismatch_is_flagged_not_substituted(self):
+        class GenModel:
+            def generate(self, prompt_ids, **kwargs):
+                return list(prompt_ids) + [9]
+
+        cab = CabinetIndex()
+        cab.add(
+            "What did William Cubitt invent?",
+            "William Cubitt is credited with inventing penal treadmill.",
+        )
+        cab.add(
+            "What did Ernesto Schiaparelli invent?",
+            "Ernesto Schiaparelli is credited with inventing Plough.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            retrain = Path(tmp) / "retrain.jsonl"
+            diag = Path(tmp) / "diag.jsonl"
+            s = _session(
+                model=GenModel(),
+                tokenizer=FakeTok("William Cubitt is credited with inventing penal treadmill."),
+                cabinet=cab,
+                retrain_path=str(retrain),
+                diagnostics_path=str(diag),
+            )
+            r = s.turn("What did Ernesto Schiaparelli invent?")
+            self.assertEqual(r.text, "William Cubitt is credited with inventing penal treadmill.")
+            self.assertEqual(r.detail, "generate_target_mismatch")
+            self.assertEqual(r.classification, "BINDING_ENTITY_SWAP")
+            recs = [json.loads(ln) for ln in retrain.read_text(encoding="utf-8").splitlines() if ln]
+            self.assertEqual(recs[0]["detail"], "generate_target_mismatch")
+            events = [json.loads(ln) for ln in diag.read_text(encoding="utf-8").splitlines() if ln]
+            self.assertEqual(events[0]["diagnostic_classification"], "BINDING_ENTITY_SWAP")
+
     def test_add_session_args_accepts_facts(self):
         parser = __import__("argparse").ArgumentParser()
         add_session_args(parser)
         ns = parser.parse_args(["--checkpoint", "ck", "--no-search"])
         self.assertTrue(ns.no_search)
+        self.assertTrue(ns.cabinet_retrain_log)
 
 
 class WebuiApiTests(unittest.TestCase):
@@ -146,6 +192,8 @@ class WebuiApiTests(unittest.TestCase):
         self.assertEqual(chat.status_code, 200)
         self.assertEqual(chat.get_json()["reply"], "4")
         self.assertEqual(chat.get_json().get("related"), [])
+        self.assertIn("classification", chat.get_json())
+        self.assertIn("match_type", chat.get_json())
         self.assertEqual(client.post("/api/clear").status_code, 200)
         empty = client.post("/api/chat", json={"message": "  "})
         self.assertEqual(empty.status_code, 400)

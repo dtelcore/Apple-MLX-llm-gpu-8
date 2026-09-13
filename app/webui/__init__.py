@@ -74,6 +74,9 @@ def create_blueprint(
                 "detail": result.detail,
                 "learned_added": result.learned_added,
                 "related": list(result.related or []),
+                "match_type": getattr(result, "match_type", "") or "",
+                "canonical": getattr(result, "canonical", "") or "",
+                "classification": getattr(result, "classification", "") or "",
             }
         )
 

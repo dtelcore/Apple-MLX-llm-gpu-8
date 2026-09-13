@@ -36,6 +36,7 @@
     .msg.assistant { background: var(--bot); border: 1px solid var(--border); }
     .who { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
     .chip { background: var(--chip); border-radius: 999px; padding: 2px 8px; font-size: 10px; color: #c4b5fd; }
+    .chip.warn { color: #fbbf24; background: #3f2f10; }
     .related { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .related button { background: var(--chip); color: var(--text); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
     .composer { padding: 12px 18px 20px; }
@@ -95,6 +96,9 @@
       if (kind && role === "assistant") {
         const chip = document.createElement("span");
         chip.className = "chip";
+        if (String(kind).indexOf("generate_target_mismatch") >= 0) {
+          chip.classList.add("warn");
+        }
         chip.textContent = kind;
         who.appendChild(chip);
       }

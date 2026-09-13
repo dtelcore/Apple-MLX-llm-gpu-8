@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Tuple
 
 from tools.calc import try_calc
-from training.cabinet_index import CabinetFact, CabinetIndex, remember
+from training.cabinet_index import (
+    CabinetFact,
+    CabinetIndex,
+    normalize_question,
+    remember,
+)
 from training.chat_format import is_chat_model_name
 
 SearchFn = Callable[[str], Optional[str]]
@@ -76,6 +81,10 @@ class RouteDecision:
     fact: Optional[CabinetFact] = None
     detail: str = ""
     related: Tuple[str, ...] = ()
+    normalized: str = ""
+    canonical: str = ""
+    match_type: str = "none"
+    source: str = ""
 
 
 def router_enabled(explicit: Optional[bool], model_name: str) -> bool:
@@ -182,6 +191,19 @@ def alias_learned_topics(index: CabinetIndex) -> None:
             index.add_alias(topic, fact)
 
 
+def alias_short_topics(index: CabinetIndex) -> None:
+    """Drop a leading ``sequential`` so layer streaming hits the trained topic."""
+    for fact in list(index.unique_facts()):
+        if fact.source != "trained":
+            continue
+        topic = search_topic(fact.user)
+        if not topic:
+            continue
+        parts = topic.split()
+        if len(parts) >= 2 and parts[0].casefold() == "sequential":
+            index.add_alias(" ".join(parts[1:]), fact)
+
+
 def alias_trained_topics(index: CabinetIndex) -> None:
     """Topic aliases for trained rows (what is neonics → Tell me about Neonics.)."""
     for fact in list(index.unique_facts()):
@@ -190,9 +212,17 @@ def alias_trained_topics(index: CabinetIndex) -> None:
         topic = search_topic(fact.user)
         if topic:
             index.add_alias(topic, fact)
+    alias_short_topics(index)
+    index.load_file_aliases()
 
 
-def _cabinet_decision(fact: CabinetFact, index: Optional[CabinetIndex]) -> RouteDecision:
+def _cabinet_decision(
+    fact: CabinetFact,
+    index: Optional[CabinetIndex],
+    *,
+    match_type: str,
+    normalized: str = "",
+) -> RouteDecision:
     learned = fact.source == "learned"
     related: Tuple[str, ...] = ()
     if index is not None and not learned:
@@ -205,6 +235,10 @@ def _cabinet_decision(fact: CabinetFact, index: Optional[CabinetIndex]) -> Route
         fact=fact,
         detail="replay" if learned else "generate",
         related=related,
+        normalized=normalized,
+        canonical=fact.user,
+        match_type=match_type,
+        source=fact.source,
     )
 
 
@@ -224,31 +258,49 @@ def route(
 ) -> RouteDecision:
     """Cabinet first, then calc, then related miss, then Wikipedia, then polite miss."""
     raw = text or ""
+    normalized = normalize_question(raw)
     session_ents = frozenset(e for e in (last_entities or ()) if e)
 
     if index is not None:
-        fact = index.lookup(raw)
-        if fact is None:
+        trained = index.resolve_trained(raw)
+        if trained is None:
             topic = search_topic(raw)
             if topic:
-                fact = index.lookup(topic)
-        if fact is not None:
-            return _cabinet_decision(fact, index)
+                trained = index.resolve_trained(topic)
+        if trained is not None:
+            fact, match_type = trained
+            return _cabinet_decision(
+                fact, index, match_type=match_type, normalized=normalized,
+            )
+
+        learned = index.resolve_learned(raw)
+        if learned is None:
+            topic = search_topic(raw)
+            if topic:
+                learned = index.resolve_learned(topic)
+        if learned is not None:
+            fact, match_type = learned
+            return _cabinet_decision(
+                fact, index, match_type=match_type, normalized=normalized,
+            )
 
         hits = index.related_template_hits(raw, session_ents)
         if len(hits) == 1:
-            return _cabinet_decision(hits[0], index)
+            return _cabinet_decision(
+                hits[0], index, match_type="trained_article", normalized=normalized,
+            )
         if len(hits) > 1:
             return RouteDecision(
                 kind="miss",
                 text=RELATED_MISS_HINT,
                 detail="related_ambiguous",
                 related=tuple(f.user for f in hits[:5]),
+                normalized=normalized,
             )
 
     calc = try_calc_query(raw)
     if calc is not None:
-        return RouteDecision(kind="calc", text=calc, detail="calc")
+        return RouteDecision(kind="calc", text=calc, detail="calc", normalized=normalized)
 
     if session_ents:
         mentioned = index.entities_mentioned(raw) if index is not None else frozenset()
@@ -258,6 +310,7 @@ def route(
             text=RELATED_MISS_HINT,
             detail="related_miss",
             related=related,
+            normalized=normalized,
         )
 
     if search_enabled and looks_like_fact_question(raw):
@@ -265,7 +318,11 @@ def route(
         fn = search_fn
         extract = fn(topic) if fn is not None and topic else None
         if extract:
-            return RouteDecision(kind="search", text=extract, detail="wikipedia")
-        return RouteDecision(kind="miss", text=MISS_HINT, detail="search_failed")
+            return RouteDecision(
+                kind="search", text=extract, detail="wikipedia", normalized=normalized,
+            )
+        return RouteDecision(
+            kind="miss", text=MISS_HINT, detail="search_failed", normalized=normalized,
+        )
 
-    return RouteDecision(kind="miss", text=MISS_HINT, detail="no_route")
+    return RouteDecision(kind="miss", text=MISS_HINT, detail="no_route", normalized=normalized)

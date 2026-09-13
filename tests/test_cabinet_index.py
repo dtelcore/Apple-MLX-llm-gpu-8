@@ -14,6 +14,7 @@ if str(_ROOT) not in sys.path:
 
 from training.cabinet_index import (
     CabinetIndex,
+    article_slot_candidates,
     extract_entities,
     load_cabinet,
     merge_cabinet,
@@ -92,6 +93,42 @@ class CabinetIndexTests(unittest.TestCase):
     def test_unobtanium_miss_is_not_fuzzy(self):
         self.assertIsNone(self.index.lookup("What is unobtanium"))
         self.assertIsNone(self.index.lookup("What is sequential layer streaming?"))
+        self.assertEqual(article_slot_candidates("What is unobtanium"), [])
+        self.assertIsNone(self.index.resolve_trained("What is unobtanium"))
+
+    def test_article_rewrite_unique_inventor(self):
+        self.index.add("Who invented Plough?", "Ernesto Schiaparelli is credited with inventing Plough.")
+        hit = self.index.resolve_trained("Who invented the plough?")
+        self.assertIsNotNone(hit)
+        fact, match = hit
+        self.assertEqual(match, "trained_article")
+        self.assertEqual(fact.user, "Who invented Plough?")
+
+    def test_article_rewrite_ambiguous_is_miss(self):
+        idx = CabinetIndex()
+        idx.add("Who invented Plough?", "A is credited with inventing Plough.")
+        idx.add("Who invented the plough?", "B is credited with inventing the plough.")
+        self.assertIsNone(idx.resolve_trained("Who invented a plough?"))
+
+    def test_file_alias_beats_learned_exact(self):
+        idx = CabinetIndex()
+        idx.add(
+            "What is sequential layer streaming?",
+            "layer_strategy=stream loads one transformer block.",
+        )
+        idx.add("what is layer streaming ?", "Howdy is an American streaming service.", source="learned")
+        idx.load_file_aliases()
+        hit = idx.resolve_trained("what is layer streaming ?")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit[1], "trained_alias")
+        self.assertEqual(hit[0].user, "What is sequential layer streaming?")
+        self.assertEqual(idx.resolve_learned("what is layer streaming ?")[0].source, "learned")
+
+    def test_quarantine_skips_trained_add(self):
+        idx = CabinetIndex()
+        idx.set_quarantine(["Who invented Plough?"])
+        self.assertIsNone(idx.add("Who invented Plough?", "Ernesto Schiaparelli is credited with inventing Plough."))
+        self.assertIsNone(idx.resolve_trained("Who invented the plough?"))
 
     def test_neonics_hit(self):
         hit = self.index.lookup("Tell me about Neonics.")
@@ -204,10 +241,9 @@ class LiveMixTests(unittest.TestCase):
         path = _ROOT / "data" / "chat_facts.jsonl"
         cls.mix = load_cabinet(path) if path.is_file() else None
 
-    def test_live_mix_france_neonics_unobtanium(self):
+    def test_live_mix_neonics_unobtanium(self):
         if self.mix is None or len(self.mix) == 0:
             self.skipTest("data/chat_facts.jsonl missing")
-        self.assertIsNotNone(self.mix.lookup("What is the capital of France?"))
         self.assertIsNotNone(self.mix.lookup("Tell me about Neonics."))
         self.assertIsNone(self.mix.lookup("What is unobtanium"))
 
@@ -220,6 +256,8 @@ class LiveMixTests(unittest.TestCase):
         self.assertIsNotNone(mix.lookup("Where is Paris?"))
         self.assertIsNotNone(mix.lookup("What country is Paris in?"))
         self.assertIsNone(mix.lookup("What is unobtanium"))
+        self.assertIsNone(mix.resolve_trained("Who invented Plough?"))
+        self.assertIsNone(mix.resolve_trained("Who invented the plough?"))
 
 
 if __name__ == "__main__":

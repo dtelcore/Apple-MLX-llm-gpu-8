@@ -16,6 +16,12 @@ import cli_common
 from logging_config import logger, setup_generate_run_logging
 from model.gpt import GPTModel
 from paths import DATA_DIR, OUTPUT_ROOT, checkpoint_weights_relpath, ensure_output_dirs
+from training.cabinet_diagnostics import (
+    answers_match,
+    append_jsonl,
+    build_turn_record,
+    classify_generation,
+)
 from training.router import (
     MISS_HINT,
     RouteDecision,
@@ -47,6 +53,8 @@ CABINET_GENERATE_TEMP = 0.2
 CABINET_GENERATE_TOP_K = 10
 DEFAULT_FACTS = DATA_DIR / "chat_facts.jsonl"
 DEFAULT_LEARNED = OUTPUT_ROOT / "cabinet_learned.jsonl"
+DEFAULT_RETRAIN = OUTPUT_ROOT / "cabinet_retrain.jsonl"
+DEFAULT_DIAGNOSTICS = OUTPUT_ROOT / "cabinet_diagnostics.jsonl"
 
 
 @dataclass
@@ -57,6 +65,9 @@ class TurnResult:
     quit: bool = False
     learned_added: int = 0
     related: List[str] = field(default_factory=list)
+    classification: str = ""
+    match_type: str = ""
+    canonical: str = ""
 
 
 @dataclass
@@ -85,6 +96,8 @@ class ChatSession:
     last_entities: List[str] = field(default_factory=list)
     last_related: List[str] = field(default_factory=list)
     trace_enabled: bool = False
+    retrain_path: str = ""
+    diagnostics_path: str = ""
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     @classmethod
@@ -147,6 +160,8 @@ class ChatSession:
             use_kv_cache=not getattr(args, "no_kv_cache", False),
             use_cuda_graph=bool(getattr(args, "cuda_graph", False)),
             trace_enabled=bool(tracer.any_enabled),
+            retrain_path=str(getattr(args, "cabinet_retrain_log", DEFAULT_RETRAIN) or ""),
+            diagnostics_path=str(getattr(args, "cabinet_diagnostics_log", DEFAULT_DIAGNOSTICS) or ""),
         )
         session.log_path = log_path
         return session
@@ -226,7 +241,10 @@ class ChatSession:
             if self.last_route is None:
                 msg = "[route] none yet"
             else:
-                msg = f"[route] kind={self.last_route.kind} detail={self.last_route.detail}"
+                msg = (
+                    f"[route] kind={self.last_route.kind} detail={self.last_route.detail}"
+                    f" match={self.last_route.match_type or 'none'}"
+                )
             return TurnResult(text=msg, kind="command", detail="route")
         if self.router_on and prompt == ":related":
             if not self.last_related:
@@ -277,11 +295,15 @@ class ChatSession:
             if decision.fact.source == "learned":
                 self.last_entities = []
                 self._remember_history(prompt, decision.fact.assistant)
+                self._emit_diagnostics(prompt, decision, decision.fact.assistant, "replay", "LEARNED_REPLAY")
                 return TurnResult(
                     text=decision.fact.assistant,
                     kind="cabinet",
                     detail=decision.detail,
                     related=related,
+                    match_type=decision.match_type,
+                    canonical=decision.canonical,
+                    classification="LEARNED_REPLAY",
                 )
             prompt_text = decision.fact.generate_prompt
             prompt_ids = self.tokenizer.encode(prompt_text)
@@ -294,28 +316,46 @@ class ChatSession:
                 k=CABINET_GENERATE_TOP_K,
                 p=None,
             )
+            detail, classification = self._score_trained_generation(prompt, decision, reply)
             if self.cabinet is not None:
                 self.last_entities = list(self.cabinet.entities_of(decision.fact))
             self._remember_history(prompt, reply)
-            return TurnResult(text=reply, kind="cabinet", detail=decision.detail, related=related)
+            return TurnResult(
+                text=reply,
+                kind="cabinet",
+                detail=detail,
+                related=related,
+                match_type=decision.match_type,
+                canonical=decision.canonical,
+                classification=classification,
+            )
         if decision.kind == "search":
             self.last_entities = []
             added = self._save_search(prompt, decision.text)
             self._remember_history(prompt, decision.text)
+            self._emit_diagnostics(prompt, decision, decision.text, decision.detail, "SEARCH")
             return TurnResult(
                 text=decision.text,
                 kind="search",
                 detail=decision.detail,
                 learned_added=added,
                 related=related,
+                match_type=decision.match_type,
+                canonical=decision.canonical,
+                classification="SEARCH",
             )
         if decision.kind in ("calc", "miss"):
             self._remember_history(prompt, decision.text)
+            label = "CALC" if decision.kind == "calc" else "MISS"
+            self._emit_diagnostics(prompt, decision, decision.text, decision.detail, label)
             return TurnResult(
                 text=decision.text,
                 kind=decision.kind,
                 detail=decision.detail,
                 related=related,
+                match_type=decision.match_type,
+                canonical=decision.canonical,
+                classification=label,
             )
         return None
 
@@ -369,6 +409,65 @@ class ChatSession:
         full_text = self.tokenizer.decode(generated_ids)
         logger.info("prompt=%r generated_text:\n%s", prompt_text, full_text)
         return reply if self.chat_mode else full_text
+
+    def _score_trained_generation(self, typed: str, decision: RouteDecision, generated: str) -> tuple:
+        expected = decision.fact.assistant if decision.fact is not None else ""
+        if answers_match(expected, generated):
+            detail = "generate"
+            classification = "MATCH"
+        else:
+            detail = "generate_target_mismatch"
+            classification = classify_generation(expected, generated, self.cabinet, decision.fact)
+            logger.warning(
+                "cabinet generate_target_mismatch typed=%r canonical=%r expected=%r generated=%r ckpt=%s",
+                typed,
+                decision.canonical or (decision.fact.user if decision.fact else ""),
+                expected,
+                generated,
+                self.args.checkpoint,
+            )
+            if self.retrain_path:
+                append_jsonl(
+                    self.retrain_path,
+                    {
+                        "typed_question": typed,
+                        "canonical_question": decision.canonical,
+                        "expected": expected,
+                        "generated": generated,
+                        "checkpoint": str(self.args.checkpoint),
+                        "detail": detail,
+                        "classification": classification,
+                        "match_type": decision.match_type,
+                    },
+                )
+        self._emit_diagnostics(typed, decision, generated, detail, classification)
+        return detail, classification
+
+    def _emit_diagnostics(
+        self,
+        typed: str,
+        decision: RouteDecision,
+        generated: str,
+        detail: str,
+        classification: str,
+    ) -> None:
+        if not self.diagnostics_path:
+            return
+        expected = ""
+        if decision.fact is not None:
+            expected = decision.fact.assistant
+        append_jsonl(
+            self.diagnostics_path,
+            build_turn_record(
+                raw_query=typed,
+                decision=decision,
+                generated=generated,
+                expected=expected,
+                checkpoint=str(self.args.checkpoint),
+                classification=classification,
+                detail=detail,
+            ),
+        )
 
     def _save_search(self, typed: str, extract: str) -> int:
         if self.cabinet is None or not extract:
@@ -459,6 +558,18 @@ def add_session_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-search", action="store_true",
         help="With --router, skip Wikipedia (fact-shaped misses go to the polite hint)",
+    )
+    parser.add_argument(
+        "--cabinet-retrain-log",
+        type=str,
+        default=str(DEFAULT_RETRAIN),
+        help="JSONL path for generate_target_mismatch events",
+    )
+    parser.add_argument(
+        "--cabinet-diagnostics-log",
+        type=str,
+        default=str(DEFAULT_DIAGNOSTICS),
+        help="JSONL path for per-turn router/generation diagnostics",
     )
     cli_common.add_generate_decode_args(parser)
     cli_common.add_trace_args(parser)

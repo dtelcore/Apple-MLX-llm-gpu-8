@@ -115,6 +115,7 @@ class AppShellTests(unittest.TestCase):
             ping = client.post("/chat/api/chat", json={"message": "2+2"})
             self.assertEqual(ping.status_code, 200)
             self.assertEqual(ping.get_json()["reply"], "4")
+            self.assertIn("classification", ping.get_json())
             weights = str(body["model"]["weights"])
             viewer = client.get("/weights/", query_string={"path": Path(ckpt.name) / "weights.npz"})
             self.assertEqual(viewer.status_code, 200)

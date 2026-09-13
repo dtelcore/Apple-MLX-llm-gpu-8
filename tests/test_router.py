@@ -153,7 +153,56 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(seen, ["first 5 prime numbers"])
         self.assertIn("2, 3, 5, 7", d.text)
 
+    
+    def test_article_alias_inventor_the(self):
+        self.index.add("Who invented Plough?", "Ernesto Schiaparelli is credited with inventing Plough.")
+        alias_trained_topics(self.index)
+        d = route("Who invented the plough?", self.index, search_enabled=False)
+        self.assertEqual(d.kind, "cabinet")
+        self.assertEqual(d.fact.user, "Who invented Plough?")
+        self.assertEqual(d.text, "User: Who invented Plough? Assistant:")
+        self.assertEqual(d.match_type, "trained_article")
+        self.assertEqual(d.canonical, "Who invented Plough?")
+
+    def test_article_alias_capital_the(self):
+        self.index.add("What is the capital of Netherlands?", "The capital of Netherlands is Amsterdam.")
+        alias_trained_topics(self.index)
+        d = route("What is the capital of the Netherlands?", self.index, search_enabled=False)
+        self.assertEqual(d.kind, "cabinet")
+        self.assertEqual(d.fact.user, "What is the capital of Netherlands?")
+
+    def test_trained_topic_beats_learned_overlay(self):
+        self.index.add(
+            "What is sequential layer streaming?",
+            "layer_strategy=stream loads one transformer block.",
+        )
+        self.index.add(
+            "what is layer streaming ?",
+            "Howdy is an American streaming service.",
+            source="learned",
+        )
+        alias_trained_topics(self.index)
+        d = route("what is layer streaming ?", self.index, search_enabled=False)
+        self.assertEqual(d.kind, "cabinet")
+        self.assertEqual(d.detail, "generate")
+        self.assertEqual(d.fact.user, "What is sequential layer streaming?")
+        self.assertEqual(d.fact.source, "trained")
+        self.assertIn(d.match_type, ("trained_alias", "trained_article"))
+
+    def test_short_topic_layer_streaming(self):
+
+        self.index.add(
+            "What is sequential layer streaming?",
+            "layer_strategy=stream loads one transformer block.",
+        )
+        alias_trained_topics(self.index)
+        d = route("what is layer streaming ?", self.index, search_enabled=False)
+        self.assertEqual(d.kind, "cabinet")
+        self.assertEqual(d.fact.user, "What is sequential layer streaming?")
+        self.assertEqual(d.text, "User: What is sequential layer streaming? Assistant:")
+
     def test_trained_topic_alias_neonics(self):
+
         alias_trained_topics(self.index)
         d = route("what is neonics", self.index, search_fn=lambda q: "SHOULD NOT SEARCH")
         self.assertEqual(d.kind, "cabinet")
@@ -209,6 +258,24 @@ class RouterTests(unittest.TestCase):
         self.assertIsNone(d.fact)
         self.assertIn("What is the capital of France?", d.related)
         self.assertNotIn("Tell me about Neonics.", d.related)
+
+    def test_v7_logged_prompts_route_without_fuzzy(self):
+        path = Path(__file__).resolve().parents[1] / "data" / "chat_facts_v7.jsonl"
+        if not path.is_file():
+            self.skipTest("data/chat_facts_v7.jsonl missing")
+        idx = __import__("training.cabinet_index", fromlist=["load_cabinet"]).load_cabinet(path)
+        alias_trained_topics(idx)
+        d_stream = route("what is layer streaming ?", idx, search_enabled=False)
+        self.assertEqual(d_stream.kind, "cabinet")
+        self.assertEqual(d_stream.fact.user, "What is sequential layer streaming?")
+        d_plough = route("Who invented the plough?", idx, search_enabled=False)
+        self.assertNotEqual(d_plough.kind, "cabinet")
+        d_cubitt = route("What did William Cubitt invent?", idx, search_enabled=False)
+        self.assertEqual(d_cubitt.kind, "cabinet")
+        self.assertEqual(d_cubitt.match_type, "trained_exact")
+        d_unk = route("What is unobtanium", idx, search_enabled=False)
+        self.assertEqual(d_unk.kind, "miss")
+        self.assertIsNone(d_unk.fact)
 
     def test_cold_where_is_paris_may_search(self):
         d = route(

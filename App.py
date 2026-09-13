@@ -30,6 +30,18 @@ def parse_args() -> argparse.Namespace:
         help="Wikipedia overlay JSONL",
     )
     parser.add_argument("--no-search", action="store_true", help="Skip Wikipedia")
+    parser.add_argument(
+        "--cabinet-retrain-log",
+        type=str,
+        default=str(OUTPUT_ROOT / "cabinet_retrain.jsonl"),
+        help="JSONL path for generate_target_mismatch events",
+    )
+    parser.add_argument(
+        "--cabinet-diagnostics-log",
+        type=str,
+        default=str(OUTPUT_ROOT / "cabinet_diagnostics.jsonl"),
+        help="JSONL path for per-turn router/generation diagnostics",
+    )
     parser.add_argument("--router", dest="router", action="store_true")
     parser.add_argument("--no-router", dest="router", action="store_false")
     parser.set_defaults(router=None, chat=True)
@@ -64,6 +76,8 @@ def _session_args(args: argparse.Namespace) -> Namespace:
         facts=facts,
         learned=args.learned,
         no_search=args.no_search,
+        cabinet_retrain_log=getattr(args, "cabinet_retrain_log", str(OUTPUT_ROOT / "cabinet_retrain.jsonl")),
+        cabinet_diagnostics_log=getattr(args, "cabinet_diagnostics_log", str(OUTPUT_ROOT / "cabinet_diagnostics.jsonl")),
         no_kv_cache=False,
         cuda_graph=False,
         verbose=False,
