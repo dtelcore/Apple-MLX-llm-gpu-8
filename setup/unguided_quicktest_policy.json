@@ -1,21 +1,21 @@
 {
-  "recipe": "setup/chat_facts_v7_config.json",
-  "checkpoint_dir": "output/checkpoints/unguided_v7",
-  "run_name": "unguided_v7",
-  "max_steps": 500,
-  "eval_every": 50,
-  "log_every": 1,
-  "max_wall_s": 7200,
-  "early_stop_patience": 4,
-  "loss_spike_ratio": 2.0,
-  "loss_median_window": 5,
+  "recipe": "setup/quicktest_config.json",
+  "checkpoint_dir": "output/checkpoints/unguided_quicktest",
+  "run_name": "unguided_quicktest",
+  "max_steps": 8,
+  "eval_every": 4,
+  "log_every": 2,
+  "max_wall_s": 180,
+  "early_stop_patience": 8,
+  "loss_spike_ratio": 4.0,
+  "loss_median_window": 3,
   "promote_on": {
     "metric": "val_loss",
     "mode": "min"
   },
   "remix_if": {
-    "cabinet_exact_match_below": 0.15,
-    "after_steps": 200,
+    "cabinet_exact_match_below": 0.0,
+    "after_steps": 1000000,
     "action": "abort_remix"
   },
   "hard_limits": {

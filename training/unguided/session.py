@@ -118,13 +118,14 @@ def make_train_args(
 
     max_steps = int(policy.get("max_steps", 500))
     eval_every = int(policy.get("eval_every", 50))
+    log_every = max(1, int(policy.get("log_every", 10)))
     argv = [
         "--config", str(config_path),
         "--checkpoint", str(checkpoint_dir),
         "--no-prompt",
         "--steps", str(max_steps),
         "--no-generate-probe",
-        "--log-every", "10",
+        "--log-every", str(log_every),
         "--checkpoint-every", str(max(1, eval_every)),
         "--run-budget", str(max_steps),
     ]

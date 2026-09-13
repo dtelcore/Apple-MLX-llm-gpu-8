@@ -22,6 +22,14 @@ restart to load a promoted net.
 - Status file `output/autotrainer_status.json` is shown in App (`/api/autotrainer`).
   Viewer mmap of promoted weights is safe; chat generate still needs a process
   restart. Do not `--resume` v7 into a harvest mix.
+- Unguided `--log-every` / policy `log_every` (default 10) sets the `[train]`
+  line cadence. Does not change `eval_every`.
+- Host-only train monitor: App **Train** tab at `/train/` and standalone
+  `trainmon.py` on 7862. Same `[train] step=N/M` series as
+  `training_log_plotter.py` (loss, tok/s) plus a 2-D landscape (step ×
+  rolling-std, color = loss). Reads `output/logs/*.log` and overlays
+  `decisions.jsonl`. No Metal — safe beside `unguided_trainer.py`. Do not
+  Load a chat checkpoint in App while a train is running.
 
 ## 0.0.8
 

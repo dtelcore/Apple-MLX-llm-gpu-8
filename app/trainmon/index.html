@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Apple MLX train monitor</title>
+  <style>
+    :root {
+      --bg: #0b0b0f;
+      --panel: #18181f;
+      --border: #2a2a33;
+      --text: #ececf1;
+      --muted: #9a9aa8;
+      --accent: #8b5cf6;
+      --loss: #4C9BE8;
+      --tok: #56C4A0;
+      --vol: #F28B5A;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 12px; min-height: 100%; }
+    header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    h1 { font-size: 15px; margin: 0; font-weight: 650; }
+    select, button { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+    .stats { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); }
+    .stats strong { color: var(--text); font-weight: 650; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px; }
+    .card h2 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
+    canvas { width: 100%; height: 220px; display: block; }
+    .wide { grid-column: 1 / -1; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+    .note { font-size: 11px; color: var(--muted); }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Train monitor</h1>
+      <label for="log">Log</label>
+      <select id="log"></select>
+      <span class="note">Host read of training logs. No Metal. Safe beside an unguided run.</span>
+    </header>
+    <div class="stats" id="stats">Waiting for log lines…</div>
+    <div class="grid">
+      <div class="card">
+        <h2>Loss vs step</h2>
+        <canvas id="loss" width="640" height="220"></canvas>
+      </div>
+      <div class="card">
+        <h2>tok/s vs step</h2>
+        <canvas id="tok" width="640" height="220"></canvas>
+      </div>
+      <div class="card wide">
+        <h2>Loss landscape — step × volatility, color = loss</h2>
+        <canvas id="land" width="960" height="240"></canvas>
+      </div>
+      <div class="card wide">
+        <h2>Decisions</h2>
+        <table>
+          <thead><tr><th>step</th><th>action</th><th>reason</th><th>val</th></tr></thead>
+          <tbody id="decisions"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <script>
+    const apiBase = {{ api_base|default('', true)|tojson }};
+    const logEl = document.getElementById("log");
+    const stats = document.getElementById("stats");
+    const tbody = document.getElementById("decisions");
+
+    function num(v) { return (v == null || Number.isNaN(v)) ? "—" : Number(v).toPrecision(4); }
+
+    function drawLine(canvas, xs, ys, color) {
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#111217";
+      ctx.fillRect(0, 0, w, h);
+      const pts = [];
+      for (let i = 0; i < xs.length; i++) {
+        if (ys[i] == null || Number.isNaN(ys[i])) continue;
+        pts.push([xs[i], ys[i]]);
+      }
+      if (pts.length < 2) return;
+      let minX = pts[0][0], maxX = pts[0][0], minY = pts[0][1], maxY = pts[0][1];
+      for (const [x, y] of pts) {
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+      if (maxX === minX) maxX = minX + 1;
+      if (maxY === minY) maxY = minY + 1e-6;
+      const l = 36, r = 10, t = 8, b = 22;
+      ctx.strokeStyle = "#2a2a33";
+      ctx.beginPath();
+      ctx.moveTo(l, t); ctx.lineTo(l, h - b); ctx.lineTo(w - r, h - b);
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => {
+        const px = l + ((x - minX) / (maxX - minX)) * (w - l - r);
+        const py = h - b - ((y - minY) / (maxY - minY)) * (h - t - b);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      ctx.fillStyle = "#9a9aa8";
+      ctx.font = "11px ui-sans-serif";
+      ctx.fillText(String(minX), l, h - 6);
+      ctx.fillText(String(maxX), w - 48, h - 6);
+    }
+
+    function drawLand(canvas, xs, vol, loss) {
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#111217";
+      ctx.fillRect(0, 0, w, h);
+      const pts = [];
+      for (let i = 0; i < xs.length; i++) {
+        if (vol[i] == null || loss[i] == null) continue;
+        pts.push([xs[i], vol[i], loss[i]]);
+      }
+      if (!pts.length) return;
+      let minX = pts[0][0], maxX = pts[0][0], minV = pts[0][1], maxV = pts[0][1];
+      let minL = pts[0][2], maxL = pts[0][2];
+      for (const p of pts) {
+        minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+        minV = Math.min(minV, p[1]); maxV = Math.max(maxV, p[1]);
+        minL = Math.min(minL, p[2]); maxL = Math.max(maxL, p[2]);
+      }
+      if (maxX === minX) maxX += 1;
+      if (maxV === minV) maxV += 1e-6;
+      if (maxL === minL) maxL += 1e-6;
+      const l = 36, r = 10, t = 8, b = 22;
+      pts.forEach(([x, v, lo]) => {
+        const tL = (lo - minL) / (maxL - minL);
+        const px = l + ((x - minX) / (maxX - minX)) * (w - l - r);
+        const py = h - b - ((v - minV) / (maxV - minV)) * (h - t - b);
+        ctx.fillStyle = `hsl(${220 - tL * 80} 70% 60%)`;
+        ctx.beginPath();
+        ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    async function loadLogs() {
+      const res = await fetch(apiBase + "/api/logs");
+      const data = await res.json();
+      const cur = logEl.value;
+      logEl.innerHTML = "";
+      for (const row of data.logs || []) {
+        const opt = document.createElement("option");
+        opt.value = row.path;
+        opt.textContent = row.name;
+        logEl.appendChild(opt);
+      }
+      if (cur) logEl.value = cur;
+    }
+
+    async function tick() {
+      const q = logEl.value ? ("?log=" + encodeURIComponent(logEl.value)) : "";
+      const res = await fetch(apiBase + "/api/series" + q);
+      const data = await res.json();
+      const last = data.last || {};
+      stats.innerHTML =
+        "<span>step <strong>" + (last.step || 0) + "</strong> / " + (last.total || "—") + "</span>" +
+        "<span>loss <strong>" + num(last.loss) + "</strong></span>" +
+        "<span>ppl <strong>" + num(last.ppl) + "</strong></span>" +
+        "<span>tok/s <strong>" + num(last.tok_s) + "</strong></span>" +
+        "<span>val <strong>" + num(last.val_loss) + "</strong></span>" +
+        "<span>" + (data.log || "") + "</span>";
+      drawLine(document.getElementById("loss"), data.steps || [], data.loss || [], "#4C9BE8");
+      drawLine(document.getElementById("tok"), data.steps || [], data.tok_s || [], "#56C4A0");
+      drawLand(document.getElementById("land"), data.steps || [], data.volatility || [], data.loss || []);
+      tbody.innerHTML = "";
+      for (const rec of (data.decisions || []).slice(-12).reverse()) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + (rec.step ?? "") + "</td><td>" + (rec.action ?? "") +
+          "</td><td>" + (rec.reason ?? "") + "</td><td>" + num(rec.val_loss) + "</td>";
+        tbody.appendChild(tr);
+      }
+    }
+
+    logEl.addEventListener("change", tick);
+    loadLogs().then(tick);
+    setInterval(() => { loadLogs().then(tick); }, 2000);
+  </script>
+</body>
+</html>

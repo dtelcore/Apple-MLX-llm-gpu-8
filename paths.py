@@ -54,6 +54,7 @@ BEST_DIR_NAME = "best"
 
 DEFAULT_CHAT_URL = "http://127.0.0.1:7860"
 DEFAULT_VIEWER_URL = "http://127.0.0.1:7861"
+DEFAULT_TRAINMON_URL = "http://127.0.0.1:7862"
 _WEIGHT_SUFFIXES = {".npz", ".npy", ".npx"}
 
 

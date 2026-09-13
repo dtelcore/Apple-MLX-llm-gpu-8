@@ -54,6 +54,8 @@ python App.py
 python App.py --checkpoint output/checkpoints/chat_facts_v6 --chat
 python webui.py --checkpoint output/checkpoints/chat_facts_v5 --chat
 python npzviewer.py --open output/checkpoints/chat_facts_v6/weights.npz
+python trainmon.py
+python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
 ```
 
 Chat checkpoints default to a **Python router**: exact cabinet hit → generate the
@@ -63,9 +65,12 @@ instead of auto-Wikipedia; `:search` or a cold-start `What is …` still hits
 Wikipedia. Wikipedia hits are appended to `output/cabinet_learned.jsonl`
 and replayed later; they are not trained into the checkpoint. Central UI:
 `python App.py` (http://127.0.0.1:7860) — model selector loads one checkpoint
-into chat (Metal) and npzviewer (mmap). Switching models restarts the process.
-Standalone `webui.py` / `npzviewer.py` still work; do not run them next to
-`App.py` or `interactive.py`. Never load two checkpoints in one process.
+into chat (Metal) and npzviewer (mmap). The **Train** tab reads logs only.
+Switching models restarts the process. Standalone `webui.py` / `npzviewer.py`
+/ `trainmon.py` (7862) still work; do not run chat UIs next to `App.py` or
+`interactive.py`. `trainmon.py` is the safe watcher beside an unguided train
+(App must not Load a checkpoint onto Metal then). Never load two checkpoints
+in one process.
 `--no-search` skips the network. Do not `combine` `data/*.txt`. Do not
 `--resume` v6 into v7.
 
@@ -98,7 +103,7 @@ Software (see `CHANGELOG.md` for detail):
 | 0.0.6 | Fact pipelines + Wikidata packs |
 | 0.0.7 | Router (cabinet → calc → Wikipedia) + web UI |
 | 0.0.8 | `App.py` (chat + pick-a-neuron + selector), related chips, topic/`the` aliases |
-| 0.0.9 | Unguided trainer kernel + autotrainer daemon (no stdin) |
+| 0.0.9 | Unguided trainer kernel + autotrainer daemon + train monitor |
 
 Cabinet checkpoints under `output/checkpoints/`:
 

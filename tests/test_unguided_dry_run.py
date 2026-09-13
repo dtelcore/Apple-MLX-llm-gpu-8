@@ -21,6 +21,20 @@ from training.unguided.session import refuse_checkpoint_dir, refuse_vocab_mismat
 
 
 class DryRunTests(unittest.TestCase):
+    def test_quicktest_policy_dry_run(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = unguided_trainer.main([
+                "--config", str(_ROOT / "setup" / "quicktest_config.json"),
+                "--policy", str(_ROOT / "setup" / "unguided_quicktest_policy.json"),
+                "--dry-run",
+            ])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("unguided_quicktest", out)
+        self.assertIn("max_steps:     8", out)
+        self.assertIn("No Metal init", out)
+
     def test_kernel_dry_run_prints_plan(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -34,7 +48,20 @@ class DryRunTests(unittest.TestCase):
         self.assertIn("UNGUIDED DRY-RUN", out)
         self.assertIn("No Metal init", out)
         self.assertIn("eval_every", out)
+        self.assertIn("log_every:     10", out)
         self.assertIn("No Metal init", out)
+
+    def test_log_every_cli_overrides_policy(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = unguided_trainer.main([
+                "--config", str(_ROOT / "setup" / "quicktest_config.json"),
+                "--policy", str(_ROOT / "setup" / "unguided_quicktest_policy.json"),
+                "--log-every", "1",
+                "--dry-run",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertIn("log_every:     1", buf.getvalue())
 
     def test_daemon_dry_run_idle_when_queue_short(self):
         with tempfile.TemporaryDirectory() as tmp:

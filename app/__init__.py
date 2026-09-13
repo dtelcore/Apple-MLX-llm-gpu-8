@@ -1,7 +1,8 @@
-"""Unified Apple MLX app: model selector + chat + npzviewer.
+"""Unified Apple MLX app: model selector + chat + npzviewer + train monitor.
 
 Chat loads one checkpoint onto Metal (2 GB). Viewer mmaps the same
-weights.npz. Switching models restarts this process — no second net.
+weights.npz. Train reads output/logs only (no Metal). Switching models
+restarts this process — no second net.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ from flask import Flask, jsonify, render_template, request
 
 from app.models import list_models, resolve_model
 from app.npzviewer import create_blueprint as viewer_blueprint
+from app.trainmon import create_blueprint as trainmon_blueprint
 from app.webui import create_blueprint as chat_blueprint
-from paths import OUTPUT_CHECKPOINTS, OUTPUT_ROOT, PROJECT_ROOT
+from paths import OUTPUT_CHECKPOINTS, OUTPUT_LOGS, OUTPUT_ROOT, PROJECT_ROOT
 
 _APP_DIR = Path(__file__).resolve().parent
 _APP_SCRIPT = PROJECT_ROOT / "App.py"
@@ -104,6 +106,7 @@ def create_app(
     load_session: Optional[Callable] = None,
     restart_fn: Optional[Callable] = None,
     autotrainer_status: Optional[Path] = None,
+    log_dir: Optional[Path] = None,
 ) -> Flask:
     state = AppState()
     state.session = session
@@ -157,6 +160,13 @@ def create_app(
             chat_url="/chat",
             api_base="/weights",
             url_prefix="/weights",
+        )
+    )
+    app.register_blueprint(
+        trainmon_blueprint(
+            log_dir=log_dir if log_dir is not None else OUTPUT_LOGS,
+            api_base="/train",
+            url_prefix="/train",
         )
     )
 

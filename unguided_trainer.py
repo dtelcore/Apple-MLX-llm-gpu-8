@@ -83,6 +83,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Override policy max_steps")
     parser.add_argument("--eval-every", type=int, default=None, help="Override policy eval_every")
+    parser.add_argument("--log-every", type=int, default=None, help="Override policy log_every")
     return parser.parse_args(argv)
 
 
@@ -104,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         policy["max_steps"] = args.max_steps
     if args.eval_every is not None:
         policy["eval_every"] = args.eval_every
+    if args.log_every is not None:
+        policy["log_every"] = args.log_every
     if args.unguarded:
         policy["unguarded"] = True
 
@@ -111,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = Path("output/runs") / run_name
     max_steps = int(policy.get("max_steps", 500))
     eval_every = int(policy.get("eval_every", 50))
+    log_every = max(1, int(policy.get("log_every", 10)))
     max_wall_s = float(policy.get("max_wall_s", 7200))
     checkpoint_dir = Path(policy.get("checkpoint_dir") or f"output/checkpoints/{run_name}")
 
@@ -130,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"param_est:     {estimate.get('total_params')} (vocab placeholder until BPE)")
         print(f"max_steps:     {max_steps}")
         print(f"eval_every:    {eval_every}")
+        print(f"log_every:     {log_every}")
         print(f"max_wall_s:    {max_wall_s}")
         print(f"early_stop:    patience={policy.get('early_stop_patience')}")
         print(f"loss_spike:    ratio={policy.get('loss_spike_ratio')}")

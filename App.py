@@ -1,7 +1,9 @@
-"""Central Apple MLX app: model selector + chat + npzviewer.
+"""Central Apple MLX app: model selector + chat + npzviewer + train monitor.
 
 One process, one Metal checkpoint (2 GB). Viewer mmaps the same weights.
-Do not run this together with webui.py or interactive.py.
+Train tab reads logs only. Do not run this together with webui.py or
+interactive.py. Do not Load a checkpoint while unguided_trainer.py holds Metal
+— use python trainmon.py (7862) instead.
 
 Usage:
     python App.py

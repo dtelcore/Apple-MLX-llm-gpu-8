@@ -99,6 +99,7 @@ class AppShellTests(unittest.TestCase):
             self.assertEqual(home.status_code, 200)
             self.assertIn(b"Select a checkpoint", home.data)
             self.assertIn(b"chat_facts_v9", home.data)
+            self.assertIn(b'id="tab-train"', home.data)
             listing = client.get("/api/models")
             self.assertEqual(listing.status_code, 200)
             self.assertFalse(listing.get_json()["loaded"])

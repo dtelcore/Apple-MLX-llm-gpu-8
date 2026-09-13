@@ -85,6 +85,21 @@ def train_segment(session: Any, steps: int) -> TrainMetrics:
         if not math.isfinite(mean_loss):
             nan = True
             break
+        log_every = max(1, int(getattr(session.args, "log_every", 10) or 10))
+        total = int(getattr(session.args, "steps", 0) or session.step)
+        if session.step % log_every == 0 or optimizer_steps >= steps:
+            ppl_now = perplexity_from_loss(mean_loss)
+            lr = 0.0
+            try:
+                lr = float(session.optimizer.current_lr())
+            except Exception:
+                pass
+            logger.info(
+                f"[train] step={session.step}/{total} epoch={int(session.epoch or 1)} "
+                f"loss={mean_loss:.4f} ppl={ppl_now:.4f} "
+                f"tok_s={float(token_count) / max(time.time() - t0, 1e-6):.0f} "
+                f"lr={lr:.6g} grad_norm={last_gnorm or 0.0:.4f}"
+            )
 
     avg_loss = float(sum(losses) / len(losses)) if losses else float("nan")
     if not math.isfinite(avg_loss):

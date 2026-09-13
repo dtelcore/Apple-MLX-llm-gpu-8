@@ -53,8 +53,9 @@
         {% endfor %}
       </select>
       <button class="btn" id="load" type="button">Load</button>
-      <a class="btn ghost{% if view != 'weights' %} active{% endif %}" id="tab-chat" href="/?view=chat">Chat</a>
+      <a class="btn ghost{% if view not in ['weights', 'train'] %} active{% endif %}" id="tab-chat" href="/?view=chat">Chat</a>
       <a class="btn ghost{% if view == 'weights' %} active{% endif %}" id="tab-weights" href="/?view=weights">Weights</a>
+      <a class="btn ghost{% if view == 'train' %} active{% endif %}" id="tab-train" href="/?view=train">Train</a>
       <span id="status">{% if loaded and selected %}Metal · {{ selected.name }}{% elif selected %}Selected {{ selected.name }} — press Load{% else %}No model loaded{% endif %}</span>
       <span id="autotrainer"></span>
     </header>
@@ -71,6 +72,7 @@
     const pane = document.getElementById("pane");
     const tabChat = document.getElementById("tab-chat");
     const tabWeights = document.getElementById("tab-weights");
+    const tabTrain = document.getElementById("tab-train");
 
     function currentRow() {
       const id = modelEl.value;
@@ -82,14 +84,18 @@
         const path = (row && row.weights) || "";
         return path ? "/weights/?path=" + encodeURIComponent(path) : "/weights/";
       }
+      if (which === "train") {
+        return "/train/";
+      }
       return "/chat/";
     }
 
     function show(which) {
       const row = currentRow();
       pane.src = paneUrl(which, row);
-      tabChat.classList.toggle("active", which !== "weights");
+      tabChat.classList.toggle("active", which === "chat");
       tabWeights.classList.toggle("active", which === "weights");
+      tabTrain.classList.toggle("active", which === "train");
       const u = new URL(location.href);
       u.searchParams.set("view", which);
       history.replaceState({}, "", u);
@@ -97,6 +103,7 @@
 
     tabChat.addEventListener("click", (e) => { e.preventDefault(); show("chat"); });
     tabWeights.addEventListener("click", (e) => { e.preventDefault(); show("weights"); });
+    tabTrain.addEventListener("click", (e) => { e.preventDefault(); show("train"); });
 
     loadBtn.addEventListener("click", async () => {
       const row = currentRow();
@@ -131,7 +138,7 @@
       }
     });
 
-    show(view === "weights" ? "weights" : "chat");
+    show(view === "weights" ? "weights" : view === "train" ? "train" : "chat");
 
     async function pollAutotrainer() {
       const el = document.getElementById("autotrainer");

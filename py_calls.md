@@ -84,7 +84,8 @@ v0.0.6: chat facts train `setup/chat_facts_config.json` → `data/chat_facts.jso
 v0.0.7: `interactive.py` router (cabinet → calc → Wikipedia). Chat checkpoints default `--router` on. Do not load a second checkpoint in that process.
 
 v0.0.8: `App.py` (selector + `/chat` + `/weights`). Related trained follow-ups after generate. npzviewer pick-a-neuron. v7 linked mix from scratch — do not `--resume` v6.
-v0.0.9: `unguided_trainer.py` + `autotrainer_daemon.py`. No stdin. Fresh BPE per harvest mix. Do not `--resume` v7 into a new mix.
+
+v0.0.9: `unguided_trainer.py` + `autotrainer_daemon.py` + `trainmon.py` (7862 / App **Train** tab). No stdin. Fresh BPE per harvest mix. Log monitor is host-only. Do not `--resume` v7 into a new mix.
 
 ### Generate probes `(shared: probe)`
 
@@ -173,6 +174,8 @@ only — do not `--resume` v6/v7 into a new mix. Remix aborts and writes
 `output/runs/<name>/NEXT_MIX.json` plus `ABORT_REASON`.
 
 ```text
+python unguided_trainer.py --config setup/quicktest_config.json --policy setup/unguided_quicktest_policy.json --dry-run
+python unguided_trainer.py --config setup/quicktest_config.json --policy setup/unguided_quicktest_policy.json
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json
 python unguided_trainer.py --config ... --policy ... --unguarded
@@ -181,11 +184,12 @@ python unguided_trainer.py --config ... --policy ... --unguarded
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
 | `--config` | str | required | Recipe JSON (architecture + dataset). Defaults stay in the v7 recipe / autoscale, not a hardcoded B/LR. |
-| `--policy` | str | required | `setup/unguided_v7_policy.json` |
+| `--policy` | str | required | `setup/unguided_quicktest_policy.json` (8 steps, tiny recipe) or `setup/unguided_v7_policy.json` |
 | `--dry-run` | flag | off | Print plan + param estimate; **no Metal** |
 | `--unguarded` | flag | off | Skip quarantine on a declared next-mix only. Cannot skip NaN/spike abort, stdin, or cross-BPE resume. |
 | `--max-steps` | int | policy | Override |
 | `--eval-every` | int | policy | Override |
+| `--log-every` | int | policy (`10`) | `[train]` line cadence. Policy key `log_every`. |
 
 Stop App first. First Metal check is `--dry-run`, then a short run into a **new** dir.
 
@@ -441,10 +445,12 @@ python interactive.py --checkpoint output/checkpoints/<story> --no-router
 
 ### `App.py`
 
-Central UI: model selector + chat (`/chat`) + npzviewer (`/weights`) in one process.
-Load puts the same checkpoint into both. Chat is Metal (2 GB); viewer is mmap.
+Central UI: model selector + chat (`/chat`) + npzviewer (`/weights`) + train
+monitor (`/train`) in one process. Load puts the same checkpoint into chat
+(Metal, 2 GB) and the viewer (mmap). Train reads `output/logs` only.
 Switching models restarts `App.py` (no second net). Default http://127.0.0.1:7860
-Do not run with `webui.py` or `interactive.py`.
+Do not run with `webui.py` or `interactive.py`. Do not Load a checkpoint
+while `unguided_trainer.py` holds Metal — use standalone `trainmon.py` instead.
 
 ```text
 python App.py
@@ -460,6 +466,29 @@ python App.py --checkpoint output/checkpoints/chat_facts_v6 --chat
 | `--port` | int | `7860` |
 
 JSON: `GET /api/models`, `POST /api/select` `{"checkpoint":"output/checkpoints/…"}`.
+Train tab: `GET /train/api/logs`, `GET /train/api/series?log=unguided_….log`.
+
+### `trainmon.py`
+
+Host-only training monitor (same series as `training_log_plotter.py` /
+`loss_landscape_plotter.py`). Reads `output/logs/*.log`; never loads Metal.
+Default http://127.0.0.1:7862
+Safe beside `unguided_trainer.py`. Do not start `App.py` with a checkpoint
+while a train is running.
+
+```text
+python trainmon.py
+python trainmon.py --port 7862
+```
+
+| Flag | Type | Default |
+|------|------|---------|
+| `--host` | str | `127.0.0.1` |
+| `--port` | int | `7862` |
+| `--log-dir` | str | `output/logs` |
+
+JSON: `GET /api/logs`, `GET /api/series?log=….log`. Poll ~2s. Short/live
+runs are kept (`min_points=2`). Overlay `output/runs/<name>/decisions.jsonl`.
 
 ### `webui.py`
 
@@ -784,8 +813,9 @@ These are imported by the entry points above; they have no project-facing argpar
 | `tools/wikidata_to_facts2.py` | Wikidata SPARQL → `data/facts/tech_facts.txt`, `health_facts.txt`, `maths_facts.txt` |
 | `generate.py` | One-shot sample (KV on by default) |
 | `interactive.py` | Generation REPL (chat checkpoints default `--router`) |
-| `App.py` | Model selector + chat + npzviewer (one Metal checkpoint) |
+| `App.py` | Model selector + chat + npzviewer + train tab (one Metal checkpoint) |
 | `npzviewer.py` | Web inspector for `.npz` / `.npy` / `.npx` weights |
+| `trainmon.py` | Host-only train monitor (7862; log read, no Metal) |
 | `tools/calc.py` | Safe AST+Decimal arithmetic (used by the router) |
 | `tools/wiki_search.py` | Wikipedia OpenSearch + summary (used by the router) |
 | `bench_step.py` | Train-step microbench |
