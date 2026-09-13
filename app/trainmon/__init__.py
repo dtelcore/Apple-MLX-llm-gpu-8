@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+
+_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 from flask import Blueprint, Flask, jsonify, render_template, request
 
@@ -82,7 +86,82 @@ def _latest_from_text(log_path: Path) -> dict:
             last["grad_norm"] = row["grad_norm"]
         if row.get("eta_s") is not None:
             last["eta_s"] = row["eta_s"]
+        if row.get("epoch") is not None:
+            last["epoch"] = row["epoch"]
     return last
+
+
+def _finite_stats(values: List[Optional[float]]) -> dict:
+    nums = [v for v in values if v is not None]
+    if not nums:
+        return {}
+    return {
+        "min": min(nums),
+        "max": max(nums),
+        "mean": sum(nums) / len(nums),
+        "first": nums[0],
+        "last": nums[-1],
+    }
+
+
+def _parse_stamp_row(line: str):
+    import training_log_plotter as tlp
+
+    parsed = tlp._parse_log_line(line)
+    if parsed is None or parsed[2].get("loss") is None:
+        return None
+    match = _TS_RE.match(line)
+    if not match:
+        return None
+    try:
+        ts = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return ts, parsed[0], parsed[1]
+
+
+def _first_train_stamp(log_path: Path):
+    try:
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for i, line in enumerate(handle):
+                if i > 800:
+                    break
+                row = _parse_stamp_row(line)
+                if row is not None:
+                    return row
+    except OSError:
+        return None
+    return None
+
+
+def _pace_from_log(log_path: Path) -> dict:
+    import training_log_plotter as tlp
+
+    try:
+        lines = tlp._read_tail_lines(log_path, 80)
+    except OSError:
+        return {}
+    stamps = []
+    for line in lines:
+        row = _parse_stamp_row(line)
+        if row is not None:
+            stamps.append(row)
+    if not stamps:
+        return {}
+    first = _first_train_stamp(log_path) or stamps[0]
+    last = stamps[-1]
+    now = datetime.now()
+    elapsed = max(0.0, (now - first[0]).total_seconds())
+    recent = stamps if len(stamps) >= 2 else [first, last]
+    window = (recent[-1][0] - recent[0][0]).total_seconds()
+    steps = recent[-1][1] - recent[0][1]
+    out = {"elapsed_s": elapsed, "started_at": first[0].isoformat(sep=" ", timespec="seconds")}
+    if window > 0 and steps > 0:
+        sec = window / steps
+        remain = max(0, last[2] - last[1])
+        out["sec_per_step"] = sec
+        out["eta_s"] = remain * sec
+    return out
 
 
 def _kind(name: str) -> str:
@@ -286,6 +365,12 @@ def series_payload(
     if last.get("loss") is not None and prev_loss is not None:
         last["dloss"] = last["loss"] - prev_loss
     last["n_points"] = len(run.steps)
+    last["loss_stats"] = _finite_stats(loss)
+    last["tok_stats"] = _finite_stats(tok)
+    last["ppl_stats"] = _finite_stats(ppl)
+    last.update(_pace_from_log(log_path))
+    if decisions:
+        last["decision"] = decisions[-1]
     return {
         "name": run.name,
         "log": log_path.name,
