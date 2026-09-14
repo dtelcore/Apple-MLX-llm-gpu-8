@@ -9,6 +9,7 @@ Usage:
   python unguided_prober.py --name Unguarded-Initialv7-Run-2
   python unguided_prober.py --checkpoint output/checkpoints/Unguarded-Initialv7-Run-2 --n 50
   python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
+  python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject
 """
 
 from __future__ import annotations
@@ -43,6 +44,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-ood", action="store_true", help="Skip out-of-mix prompts")
     parser.add_argument("--dry-run", action="store_true", help="Select prompts and print plan; no Metal")
+    parser.add_argument(
+        "--probe-mode",
+        type=str,
+        default="cabinet",
+        choices=("cabinet", "english", "inject"),
+        help="cabinet (default), english (Phase 1 OOD), inject (Phase 2 held-out frames + OOD)",
+    )
     return parser.parse_args(argv)
 
 
@@ -72,13 +80,20 @@ def main(argv: list[str] | None = None) -> int:
     from training.cabinet_index import load_cabinet
     from training.unguided.decide import decide_next_step
     from training.unguided.prober import (
+        PHASE1_OOD_PROMPTS,
+        PHASE2_INJECT_PROMPTS,
         resolve_checkpoint,
         resolve_facts,
         resolve_run_dir,
         select_prompts,
         next_step_context,
+        write_inject_probe_reports,
         write_probe_reports,
     )
+
+    probe_mode = str(args.probe_mode or "cabinet").strip().lower()
+    inject = probe_mode == "inject"
+    english = probe_mode == "english"
 
     try:
         checkpoint = resolve_checkpoint(args.name, args.checkpoint) if (args.name or args.checkpoint) else None
@@ -89,29 +104,44 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("%s", exc)
             return 2
 
-    facts = resolve_facts(args.facts, args.config)
-    if not facts.is_file():
-        logger.error("Facts not found: %s", facts)
-        return 2
+    facts = None
+    if not inject and not english:
+        facts = resolve_facts(args.facts, args.config)
+        if not facts.is_file():
+            logger.error("Facts not found: %s", facts)
+            return 2
     run_dir = resolve_run_dir(args.name, checkpoint or Path("probe"), args.out_dir)
     last_eval = _last_eval(run_dir)
     step = _step_from_checkpoint(checkpoint) if checkpoint is not None else last_eval.get("step")
     max_steps = int(args.max_steps or last_eval.get("max_steps") or 1500)
 
     if args.dry_run:
-        index = load_cabinet(facts)
-        picked = select_prompts(index, int(args.n), seed=int(args.seed))
         print("=== UNGUIDED PROBER DRY-RUN ===")
         print(f"checkpoint:    {checkpoint}")
-        print(f"facts:         {facts}")
+        print(f"probe_mode:    {probe_mode}")
         print(f"out_dir:       {run_dir}")
-        print(f"n:             {args.n}")
-        print(f"ood:           {not args.no_ood}")
-        print(f"selected:      {len(picked)}")
-        for fact in picked[:12]:
-            print(f"  - {fact.user}")
-        if len(picked) > 12:
-            print(f"  … {len(picked) - 12} more")
+        if inject:
+            print("ood prompts:")
+            for prompt in PHASE1_OOD_PROMPTS:
+                print(f"  - {prompt}")
+            print("inject frames:")
+            for prompt in PHASE2_INJECT_PROMPTS:
+                print(f"  - {prompt}")
+        elif english:
+            print("ood prompts:")
+            for prompt in PHASE1_OOD_PROMPTS:
+                print(f"  - {prompt}")
+        else:
+            index = load_cabinet(facts)
+            picked = select_prompts(index, int(args.n), seed=int(args.seed))
+            print(f"facts:         {facts}")
+            print(f"n:             {args.n}")
+            print(f"ood:           {not args.no_ood}")
+            print(f"selected:      {len(picked)}")
+            for fact in picked[:12]:
+                print(f"  - {fact.user}")
+            if len(picked) > 12:
+                print(f"  … {len(picked) - 12} more")
         print("No Metal init. Exiting 0.")
         return 0
 
@@ -121,35 +151,58 @@ def main(argv: list[str] | None = None) -> int:
 
     from model.gpt import GPTModel
     from training.checkpoint import load_checkpoint
-    from training.unguided.prober import run_generate_probe
+    from training.unguided.prober import run_english_stop_probe, run_generate_probe, run_inject_probe
 
     logger.info("loading checkpoint %s", checkpoint)
     gpt_config, params, tokenizer, _, _ = load_checkpoint(str(checkpoint))
     model = GPTModel(gpt_config, params)
-    report = run_generate_probe(
-        model=model,
-        tokenizer=tokenizer,
-        facts_path=facts,
-        n=int(args.n),
-        seed=int(args.seed),
-        include_ood=not args.no_ood,
-        step=int(step) if step is not None else None,
-        checkpoint=str(checkpoint),
-    )
-    if last_eval.get("cabinet_exact_match") is not None:
-        report["teacher_forced"] = last_eval.get("cabinet_exact_match")
+    policy = {"probe_mode": "english"} if (inject or english) else {}
+    if inject:
+        report = run_inject_probe(
+            model=model,
+            tokenizer=tokenizer,
+            step=int(step) if step is not None else None,
+            checkpoint=str(checkpoint),
+            seed=int(args.seed),
+        )
+    elif english:
+        report = run_english_stop_probe(
+            model=model,
+            tokenizer=tokenizer,
+            step=int(step) if step is not None else None,
+            checkpoint=str(checkpoint),
+            seed=int(args.seed),
+        )
+    else:
+        report = run_generate_probe(
+            model=model,
+            tokenizer=tokenizer,
+            facts_path=facts,
+            n=int(args.n),
+            seed=int(args.seed),
+            include_ood=not args.no_ood,
+            step=int(step) if step is not None else None,
+            checkpoint=str(checkpoint),
+        )
+        if last_eval.get("cabinet_exact_match") is not None:
+            report["teacher_forced"] = last_eval.get("cabinet_exact_match")
     verdict = decide_next_step(
         next_step_context(
             step=int(step or 0),
             max_steps=int(max_steps),
-            policy={},
+            policy=policy,
             last_eval=last_eval,
             report=report,
         )
     )
-    md = write_probe_reports(run_dir, report, verdict)
-    print(f"exact {report['n_match']}/{report['n_cabinet']} = {report['exact_rate']:.1%}")
-    print(f"swap  {report['n_swap']}/{report['n_cabinet']} = {report['swap_rate']:.1%}")
+    if inject:
+        md = write_inject_probe_reports(run_dir, report, verdict)
+        print(f"inject frames {len(report.get('inject') or [])}  ood dumps {report['ood_mix_copies']}/{report['ood_n']}")
+    else:
+        md = write_probe_reports(run_dir, report, verdict)
+        if not english:
+            print(f"exact {report['n_match']}/{report['n_cabinet']} = {report['exact_rate']:.1%}")
+            print(f"swap  {report['n_swap']}/{report['n_cabinet']} = {report['swap_rate']:.1%}")
     print(f"mode  {verdict.mode}  understands={verdict.understands}  next={verdict.primary}")
     print(f"wrote {md}")
     return 0

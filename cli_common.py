@@ -99,6 +99,16 @@ def add_training_length_args(parser: argparse.ArgumentParser) -> None:
         "--val-every", type=int, default=0,
         help="Lightweight val loss every N steps without quarterly checkpoint I/O (0=off; try 500 for sweeps)",
     )
+    group.add_argument(
+        "--dataset-path", type=str, default=None, dest="dataset_path",
+        help="Resume only: reload train corpus from this file, keep checkpoint tokenizer and val_corpus.json. "
+             "Never rebuilds BPE. Refused without --resume.",
+    )
+    group.add_argument(
+        "--reset-lr-schedule", action="store_true", dest="reset_lr_schedule",
+        help="Resume only: set AdamW t=0 so cosine is not stuck at the Phase 1 floor. "
+             "Required for Phase 2 inject.",
+    )
 
 
 def prompt_training_length_and_lr(args: argparse.Namespace, hyperparams: Dict) -> None:

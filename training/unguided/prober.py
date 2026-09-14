@@ -100,8 +100,15 @@ PHASE1_OOD_PROMPTS = (
     "A steam engine train traveled down the tracks",
     "Deep beneath the ocean surface, scientists discovered",
 )
+PHASE2_INJECT_PROMPTS = (
+    "Regarding the administrative capital city of France, it is",
+    "When evaluating the core functionality of human kidneys, they",
+    "The primary structural breakdown of prime numbers implies that",
+)
 ENGLISH_GENERATE_TEMP = 0.8
 ENGLISH_MAX_NEW_TOKENS = 12
+INJECT_GENERATE_TEMP = 0.7
+INJECT_MAX_NEW_TOKENS = 15
 _CABINET_DUMP_MARKERS = (
     "the capital of",
     " belongs to the ",
@@ -435,6 +442,86 @@ def run_english_stop_probe(
     }
 
 
+def run_inject_probe(
+    *,
+    model: Any,
+    tokenizer: Any,
+    step: int | None = None,
+    checkpoint: str = "",
+    seed: int = 42,
+    ood_prompts: Sequence[str] = PHASE1_OOD_PROMPTS,
+    inject_prompts: Sequence[str] = PHASE2_INJECT_PROMPTS,
+) -> dict[str, Any]:
+    """English forgetting check plus held-out fact frames (not mix-exact recitation)."""
+    ood_rows: list[dict[str, Any]] = []
+    for i, prompt in enumerate(ood_prompts):
+        generated = generate_english_continuation(
+            model, tokenizer, prompt, seed=int(seed) + i,
+        )
+        ood_rows.append(
+            {
+                "kind": "english_ood",
+                "typed": prompt,
+                "prompt": prompt,
+                "generated": generated,
+                "copies_mix": looks_like_cabinet_dump(generated),
+            }
+        )
+    inject_rows: list[dict[str, Any]] = []
+    for i, prompt in enumerate(inject_prompts):
+        generated = generate_english_continuation(
+            model,
+            tokenizer,
+            prompt,
+            seed=int(seed) + 1000 + i,
+            max_new_tokens=INJECT_MAX_NEW_TOKENS,
+            temperature=INJECT_GENERATE_TEMP,
+        )
+        inject_rows.append(
+            {
+                "kind": "inject_frame",
+                "typed": prompt,
+                "prompt": prompt,
+                "generated": generated,
+                "copies_mix": looks_like_cabinet_dump(generated),
+            }
+        )
+    n_ood = len(ood_rows)
+    n_dump = sum(1 for r in ood_rows if r.get("copies_mix"))
+    return {
+        "probe_mode": "inject",
+        "checkpoint": checkpoint,
+        "facts": "data/english_phase2_mix.txt",
+        "step": step,
+        "n_unique": 0,
+        "settings": {
+            "temperature": INJECT_GENERATE_TEMP,
+            "top_k": None,
+            "n": n_ood + len(inject_rows),
+            "seed": seed,
+            "max_new_tokens": INJECT_MAX_NEW_TOKENS,
+            "ood_temperature": ENGLISH_GENERATE_TEMP,
+            "ood_max_new_tokens": ENGLISH_MAX_NEW_TOKENS,
+        },
+        "n_cabinet": 0,
+        "n_match": 0,
+        "n_swap": 0,
+        "exact_rate": None,
+        "swap_rate": 0.0,
+        "class_counts": {},
+        "by_family": {},
+        "collapsing_families": [],
+        "long_unique_fail": 0,
+        "short_template_exact": None,
+        "ood_n": n_ood,
+        "ood_mix_copies": n_dump,
+        "mix_smells": {"dirty_n": 0, "shared_n": 0, "dirty_gold": [], "shared_assistants": []},
+        "cabinet": [],
+        "ood": ood_rows,
+        "inject": inject_rows,
+    }
+
+
 def generate_reply(model: Any, tokenizer: Any, prompt_text: str, seed: int) -> str:
     prompt_ids = tokenizer.encode(prompt_text)
     if not prompt_ids:
@@ -592,8 +679,13 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
             f"n={report.get('ood_n')} (Phase 1 English generate)"
             if report.get("probe_mode") == "english"
             else (
-                f"- settings: temp={CABINET_GENERATE_TEMP} top_k={CABINET_GENERATE_TOP_K} "
-                f"n={report.get('n_cabinet')} (App cabinet generate)"
+                f"- settings: inject temp={INJECT_GENERATE_TEMP} max_new={INJECT_MAX_NEW_TOKENS}; "
+                f"ood temp={ENGLISH_GENERATE_TEMP} (Phase 2 conceptual inject, not exact-match)"
+                if report.get("probe_mode") == "inject"
+                else (
+                    f"- settings: temp={CABINET_GENERATE_TEMP} top_k={CABINET_GENERATE_TOP_K} "
+                    f"n={report.get('n_cabinet')} (App cabinet generate)"
+                )
             )
         ),
         "",
@@ -609,7 +701,8 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
     for reason in verdict.reasons:
         lines.append(f"- {reason}")
     english = report.get("probe_mode") == "english"
-    if english:
+    inject = report.get("probe_mode") == "inject"
+    if english or inject:
         lines += [
             "",
             "## Out-of-distribution prose",
@@ -625,6 +718,21 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
                 lines.append(f"**{row.get('typed')}** ({flag})")
                 lines.append(f"- {row.get('generated')}")
                 lines.append("")
+        if inject:
+            inject_rows = list(report.get("inject") or [])
+            lines += [
+                "## Held-out inject frames",
+                "",
+                "These prompts are not the mix strings. Score paraphrased on-target English, not 96% exact.",
+                "",
+            ]
+            if not inject_rows:
+                lines.append("_None._")
+            else:
+                for row in inject_rows:
+                    lines.append(f"**Inject Frame:** `{row.get('typed')}`")
+                    lines.append(f"**Result:** `{row.get('generated')}`")
+                    lines.append("")
     else:
         exact = report.get("exact_rate") or 0.0
         swap = report.get("swap_rate") or 0.0
@@ -719,14 +827,19 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
             f"{'yes' if item.needed else 'no'} | {item.why} |"
         )
     closing = (
-        "Read OOD completions for English structure, not cabinet exact. "
-        "Phase 2 later: `auto_train.py --resume` this checkpoint with a light mix. "
-        "Unguided will not resume this dir."
-        if verdict.mode == "english_foundation"
+        "Read OOD completions for English structure and held-out inject frames for conceptual integration, "
+        "not v9 96% exact. Unguided will not resume this dir."
+        if report.get("probe_mode") == "inject"
         else (
-            "This checkpoint is **memorizing**. It does **not** understand."
-            if not verdict.understands
-            else "Binding looks general enough to hold; still a cabinet reciter by product design."
+            "Read OOD completions for English structure, not cabinet exact. "
+            "Phase 2 later: `auto_train.py --resume` this checkpoint with a light mix. "
+            "Unguided will not resume this dir."
+            if verdict.mode == "english_foundation"
+            else (
+                "This checkpoint is **memorizing**. It does **not** understand."
+                if not verdict.understands
+                else "Binding looks general enough to hold; still a cabinet reciter by product design."
+            )
         )
     )
     lines += [
@@ -755,6 +868,20 @@ def write_probe_reports(out_dir: Path, report: dict[str, Any], verdict: NextStep
         json.dumps(verdict.to_dict(), indent=2) + "\n",
         encoding="utf-8",
     )
+    return md_path
+
+
+def write_inject_probe_reports(out_dir: Path, report: dict[str, Any], verdict: NextStepResult) -> Path:
+    """Write inject_probe.md without replacing Phase 1 generate_probe.md."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = dict(report)
+    payload["verdict"] = verdict.to_dict()
+    (out_dir / "inject_probe.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    md_path = out_dir / "inject_probe.md"
+    md_path.write_text(render_markdown(report, verdict), encoding="utf-8")
     return md_path
 
 

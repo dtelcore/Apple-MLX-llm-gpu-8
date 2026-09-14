@@ -146,6 +146,8 @@ python train.py [flags]
 | `--models-dir` | str | `output/checkpoints` | Checkpoint scan for menu / `--generate` |
 | `--generate` | flag | off | Skip train; generation REPL |
 | `--resume` | flag | off | Resume from `--checkpoint` |
+| `--dataset-path` | str | | Resume only: swap train corpus; keep tokenizer + `val_corpus.json` |
+| `--reset-lr-schedule` | flag | off | Resume only: AdamW `t=0` (required for Phase 2 inject) |
 | `--temperature` | float | probe default | Probes / `--generate` |
 | `--top-k` | int | probe default | |
 | `--top-p` | float | probe default | |
@@ -163,6 +165,14 @@ python train.py --resume --checkpoint output\checkpoints\BiggerTest256256 --runt
 python train.py --tokenizer char --menu   # opt into character tokenizer
 python train.py --generate --models-dir output\checkpoints
 python train.py --compare-quarters --checkpoint output\checkpoints\BiggerTest256256
+
+# Phase 2 inject (after English-Phase1 finishes). Same BPE. Unguided cannot resume.
+python tools/build_english_phase2_mix.py
+python auto_train.py --resume --checkpoint output/checkpoints/English-Phase1 \
+  --dataset-path data/english_phase2_mix.txt --reset-lr-schedule \
+  --learning-rate 5e-5 --steps 1500 --val-every 50 --no-prompt \
+  --prompt "Photosynthesis is a process where plants" --max-new-tokens 40
+python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject
 ```
 
 ---
@@ -213,6 +223,8 @@ prompts, and write the same markdown report. `--dry-run` selects prompts only.
 ```text
 python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
 python unguided_prober.py --checkpoint output/checkpoints/Unguarded-Initialv7-Run-2 --n 50
+python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject --dry-run
+python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject
 ```
 
 | Flag | Type | Default | Notes |
@@ -222,6 +234,7 @@ python unguided_prober.py --checkpoint output/checkpoints/Unguarded-Initialv7-Ru
 | `--facts` | str | recipe / v7 | Trained cabinet only (no learned wiki overlay) |
 | `--n` | int | `50` | Cabinet generates |
 | `--dry-run` | flag | off | **No Metal** |
+| `--probe-mode` | str | `cabinet` | `cabinet`, `english` (Phase 1 OOD), `inject` (Phase 2 held-out frames + OOD → `inject_probe.md`) |
 
 Stop App and the trainer first. Unguided cannot resume that dir; the report
 says whether to change data, remix, step longer, or change C/L/T / policy.
@@ -267,6 +280,8 @@ python auto_train.py [flags]
 |------|------|---------|-------|
 | *(shared: config, checkpoint, seed, length, model, probe, quality, trace, obs, tokenizer)* | | | |
 | `--resume` | flag | off | |
+| `--dataset-path` | str | | Resume only: inject mix path (keep Phase 1 BPE) |
+| `--reset-lr-schedule` | flag | off | Resume only: AdamW `t=0` |
 | `--prompt` | str | `the` | Smoke sample seed |
 | `--max-new-tokens` | int | `80` | Smoke sample length |
 | `--temperature` | float | probe default | **0.6** |

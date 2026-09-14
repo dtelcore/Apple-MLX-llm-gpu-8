@@ -42,6 +42,13 @@ restart to load a promoted net.
   `--resume` v7/v8/v9. Product chat stays `chat_facts_v7`. Standalone:
   `unguided_prober.py`. `--no-probe` skips it. Quicktest policy leaves
   `probe_on_stop` off. Do not generate-every-eval.
+- Phase 2 inject (same BPE): `tools/build_english_phase2_mix.py` writes
+  `data/english_phase2_mix.txt` (full `data/train.txt` plus four unique
+  frames per v9 fact, no 300×). Continue with `auto_train.py --resume
+  --checkpoint output/checkpoints/English-Phase1 --dataset-path
+  data/english_phase2_mix.txt --reset-lr-schedule`. Unguided will not
+  resume that dir. `--dataset-path` is refused without `--resume` and
+  never rebuilds BPE. Probe: `unguided_prober.py --probe-mode inject`.
 
 ## 0.0.8
 

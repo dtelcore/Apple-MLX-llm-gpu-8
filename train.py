@@ -461,17 +461,34 @@ def train(args: argparse.Namespace) -> str:
     tokenizer = gpt_config = params = None
     run_dir = run_root_for_checkpoint(args.checkpoint)
 
+    dataset_path = getattr(args, "dataset_path", None)
+    from training.resume_inject import ResumeInjectError, apply_resume_dataset_path, verify_resume_inject
+
+    try:
+        verify_resume_inject(
+            resume=bool(getattr(args, "resume", False)),
+            dataset_path=dataset_path,
+            checkpoint_dir=args.checkpoint,
+        )
+    except (ResumeInjectError, FileNotFoundError) as exc:
+        raise SystemExit(str(exc)) from exc
+
     if getattr(args, "resume", False):
         from training.checkpoint import load_checkpoint
 
         gpt_config, params, tokenizer, config, state = load_checkpoint(args.checkpoint)
         start_step = int(state.get("step", 0))
         resumed = True
+        loaded_ckpt = str(args.checkpoint)
         run_dir = run_root_for_checkpoint(args.checkpoint)
         # Continue writing latest/quarters into the parent run root.
         args.checkpoint = str(run_dir)
         print(f"-> Resuming '{args.checkpoint}' from step {start_step:,} "
               f"(source={state.get('version', '?')}; writing latest into run root)")
+        if dataset_path:
+            apply_resume_dataset_path(
+                config, loaded_ckpt, dataset_path, tokenizer=tokenizer,
+            )
     elif getattr(args, "menu", False):
         from training.checkpoint import load_checkpoint
 
@@ -490,6 +507,10 @@ def train(args: argparse.Namespace) -> str:
                   f"(writing latest into '{run_dir}'; "
                   f"model architecture is fixed by the checkpoint; only training-length/LR "
                   f"prompts still apply)")
+            if dataset_path:
+                apply_resume_dataset_path(
+                    config, resume_ckpt, dataset_path, tokenizer=tokenizer,
+                )
         else:
             from setup.training_setup import quickstart_training_setup
             config = quickstart_training_setup(interactive=True, data_dir=getattr(args, "data_dir", "data"))
@@ -667,15 +688,28 @@ def train(args: argparse.Namespace) -> str:
         min_lr_ratio=float(hyperparams.get("min_lr_ratio", 0.1)),
     )
     if resumed:
-        optimizer.t = start_step
-        warn = (
-            "Adam moments (m/v) were NOT restored from disk — buffers start at zero. "
-            "Step counter t=%s was restored so the LR schedule continues, but early "
-            "post-resume loss/grad spikes can look like a failure when they are not. "
-            "This is intentional (weights-only checkpoints to conserve memory)."
-        ) % start_step
-        print(f"WARNING: {warn}")
-        logger.warning(warn)
+        if getattr(args, "reset_lr_schedule", False):
+            optimizer.t = 0
+            if args.steps is not None:
+                optimizer.total_steps = max(1, int(args.steps))
+            print(
+                "LR schedule reset: optimizer.t=0 "
+                f"(cosine over {optimizer.total_steps} inject steps; weights kept)."
+            )
+            logger.info(
+                "reset-lr-schedule | t=0 total_steps=%s base_lr=%s",
+                optimizer.total_steps, hyperparams["learning_rate"],
+            )
+        else:
+            optimizer.t = start_step
+            warn = (
+                "Adam moments (m/v) were NOT restored from disk — buffers start at zero. "
+                "Step counter t=%s was restored so the LR schedule continues, but early "
+                "post-resume loss/grad spikes can look like a failure when they are not. "
+                "This is intentional (weights-only checkpoints to conserve memory)."
+            ) % start_step
+            print(f"WARNING: {warn}")
+            logger.warning(warn)
 
     val_every = max(0, int(getattr(args, "val_every", 0) or 0))
 
