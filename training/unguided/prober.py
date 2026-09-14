@@ -93,6 +93,24 @@ DEFAULT_OOD = (
     "Who is the president of France?",
 )
 
+PHASE1_OOD_PROMPTS = (
+    "Once upon a time in a valley",
+    "Photosynthesis is a process where plants",
+    "The lost city of Atlantis was rumored to",
+    "A steam engine train traveled down the tracks",
+    "Deep beneath the ocean surface, scientists discovered",
+)
+ENGLISH_GENERATE_TEMP = 0.8
+ENGLISH_MAX_NEW_TOKENS = 12
+_CABINET_DUMP_MARKERS = (
+    "the capital of",
+    " belongs to the ",
+    "is the pathogen that causes",
+    "user:",
+    "assistant:",
+    "rotavirus",
+)
+
 _FAMILY_RULES = (
     (r"^what is the capital of ", "capital_of"),
     (r"^what is .+?'s capital$", "possess_capital"),
@@ -328,6 +346,95 @@ def summarize_rows(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def looks_like_cabinet_dump(text: str) -> bool:
+    low = (text or "").casefold()
+    if not low.strip():
+        return True
+    return any(m in low for m in _CABINET_DUMP_MARKERS)
+
+
+def generate_english_continuation(
+    model: Any,
+    tokenizer: Any,
+    prompt_text: str,
+    seed: int,
+    *,
+    max_new_tokens: int = ENGLISH_MAX_NEW_TOKENS,
+    temperature: float = ENGLISH_GENERATE_TEMP,
+) -> str:
+    prompt_ids = tokenizer.encode(prompt_text)
+    if not prompt_ids:
+        return ""
+    generated_ids = model.generate(
+        prompt_ids,
+        max_new_tokens=int(max_new_tokens),
+        temperature=float(temperature),
+        top_k=None,
+        top_p=None,
+        tokenizer=tokenizer,
+        rng=np.random.default_rng(int(seed)),
+        use_kv_cache=True,
+        stop_strings=None,
+    )
+    new_ids = generated_ids[len(prompt_ids) :]
+    return tokenizer.decode(new_ids).strip()
+
+
+def run_english_stop_probe(
+    *,
+    model: Any,
+    tokenizer: Any,
+    step: int | None = None,
+    checkpoint: str = "",
+    seed: int = 42,
+    prompts: Sequence[str] = PHASE1_OOD_PROMPTS,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for i, prompt in enumerate(prompts):
+        generated = generate_english_continuation(model, tokenizer, prompt, seed=int(seed) + i)
+        dump = looks_like_cabinet_dump(generated)
+        rows.append(
+            {
+                "kind": "english_ood",
+                "typed": prompt,
+                "prompt": prompt,
+                "generated": generated,
+                "copies_mix": dump,
+            }
+        )
+    n = len(rows)
+    n_dump = sum(1 for r in rows if r.get("copies_mix"))
+    return {
+        "probe_mode": "english",
+        "checkpoint": checkpoint,
+        "facts": "data/train.txt",
+        "step": step,
+        "n_unique": 0,
+        "settings": {
+            "temperature": ENGLISH_GENERATE_TEMP,
+            "top_k": None,
+            "n": n,
+            "seed": seed,
+            "max_new_tokens": ENGLISH_MAX_NEW_TOKENS,
+        },
+        "n_cabinet": 0,
+        "n_match": 0,
+        "n_swap": 0,
+        "exact_rate": None,
+        "swap_rate": 0.0,
+        "class_counts": {},
+        "by_family": {},
+        "collapsing_families": [],
+        "long_unique_fail": 0,
+        "short_template_exact": None,
+        "ood_n": n,
+        "ood_mix_copies": n_dump,
+        "mix_smells": {"dirty_n": 0, "shared_n": 0, "dirty_gold": [], "shared_assistants": []},
+        "cabinet": [],
+        "ood": rows,
+    }
+
+
 def generate_reply(model: Any, tokenizer: Any, prompt_text: str, seed: int) -> str:
     prompt_ids = tokenizer.encode(prompt_text)
     if not prompt_ids:
@@ -416,6 +523,14 @@ def run_generate_probe(
 
 
 def run_session_probe(session: Any, policy: dict[str, Any]) -> dict[str, Any]:
+    if str(policy.get("probe_mode") or "cabinet").strip().lower() == "english":
+        return run_english_stop_probe(
+            model=session.model,
+            tokenizer=session.tokenizer,
+            step=int(getattr(session, "step", 0) or 0),
+            checkpoint=str(getattr(session, "checkpoint_dir", "") or ""),
+            seed=int(policy.get("probe_seed", 42)),
+        )
     facts = Path(session.dataset_path or DEFAULT_FACTS)
     if not facts.is_file():
         facts = DEFAULT_FACTS
@@ -473,8 +588,13 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
         f"- step: {report.get('step')}",
         f"- mix: `{report.get('facts') or ''}` ({report.get('n_unique')} unique trained)",
         (
-            f"- settings: temp={CABINET_GENERATE_TEMP} top_k={CABINET_GENERATE_TOP_K} "
-            f"n={report.get('n_cabinet')} (App cabinet generate)"
+            f"- settings: temp={ENGLISH_GENERATE_TEMP} max_new={ENGLISH_MAX_NEW_TOKENS} "
+            f"n={report.get('ood_n')} (Phase 1 English generate)"
+            if report.get("probe_mode") == "english"
+            else (
+                f"- settings: temp={CABINET_GENERATE_TEMP} top_k={CABINET_GENERATE_TOP_K} "
+                f"n={report.get('n_cabinet')} (App cabinet generate)"
+            )
         ),
         "",
         "## Verdict",
@@ -488,78 +608,96 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
     ]
     for reason in verdict.reasons:
         lines.append(f"- {reason}")
-    exact = report.get("exact_rate") or 0.0
-    swap = report.get("swap_rate") or 0.0
-    lines += [
-        "",
-        "## Scores",
-        "",
-        f"| metric | value |",
-        f"|---|---|",
-        f"| generate exact | {report.get('n_match')}/{report.get('n_cabinet')} ({exact:.1%}) |",
-        f"| neighbour / entity swap | {report.get('n_swap')}/{report.get('n_cabinet')} ({swap:.1%}) |",
-        f"| teacher-forced cabinet exact | {report.get('teacher_forced', 'n/a')} |",
-        f"| OOD mix copies | {report.get('ood_mix_copies')}/{report.get('ood_n')} |",
-        "",
-        "### By family",
-        "",
-        "| family | exact | swap | n |",
-        "|---|---:|---:|---:|",
-    ]
-    for name, stats in by_fam.items():
-        lines.append(f"| {name} | {stats.get('ok', 0)} | {stats.get('swap', 0)} | {stats.get('n', 0)} |")
-
-    def _dump(title: str, pred) -> None:
-        picked = [r for r in rows if pred(r)]
-        lines.append("")
-        lines.append(f"## {title}")
-        if not picked:
-            lines.append("")
+    english = report.get("probe_mode") == "english"
+    if english:
+        lines += [
+            "",
+            "## Out-of-distribution prose",
+            "",
+            f"| cabinet-shaped dumps | {report.get('ood_mix_copies')}/{report.get('ood_n')} |",
+            "",
+        ]
+        if not ood:
             lines.append("_None._")
-            return
-        for row in picked:
-            lines.append("")
-            lines.append(f"**{row.get('canonical')}** (`{row.get('family')}`)")
-            lines.append(f"- expected: {row.get('expected')}")
-            lines.append(f"- generated: {row.get('generated')}")
-            if row.get("swapped_from"):
-                lines.append(f"- swapped from: {row.get('swapped_from')}")
-
-    _dump("Neighbour / entity swaps", lambda r: r.get("classification") in (
-        "BINDING_ENTITY_SWAP", "TEMPLATE_NEIGHBOUR_SWAP",
-    ))
-    _dump("Other mismatches", lambda r: r.get("classification") == "TARGET_MISMATCH")
-
-    hits = [r for r in rows if r.get("match")]
-    lines += ["", "## Hits (sample)", ""]
-    if not hits:
-        lines.append("_None._")
+        else:
+            for row in ood:
+                flag = "cabinet-shaped" if row.get("copies_mix") else "prose"
+                lines.append(f"**{row.get('typed')}** ({flag})")
+                lines.append(f"- {row.get('generated')}")
+                lines.append("")
     else:
-        for row in hits[:8]:
-            lines.append(f"- {row.get('canonical')} → {row.get('generated')}")
+        exact = report.get("exact_rate") or 0.0
+        swap = report.get("swap_rate") or 0.0
+        lines += [
+            "",
+            "## Scores",
+            "",
+            f"| metric | value |",
+            f"|---|---|",
+            f"| generate exact | {report.get('n_match')}/{report.get('n_cabinet')} ({exact:.1%}) |",
+            f"| neighbour / entity swap | {report.get('n_swap')}/{report.get('n_cabinet')} ({swap:.1%}) |",
+            f"| teacher-forced cabinet exact | {report.get('teacher_forced', 'n/a')} |",
+            f"| OOD mix copies | {report.get('ood_mix_copies')}/{report.get('ood_n')} |",
+            "",
+            "### By family",
+            "",
+            "| family | exact | swap | n |",
+            "|---|---:|---:|---:|",
+        ]
+        for name, stats in by_fam.items():
+            lines.append(f"| {name} | {stats.get('ok', 0)} | {stats.get('swap', 0)} | {stats.get('n', 0)} |")
 
-    lines += ["", "## Out of mix", ""]
-    if not ood:
-        lines.append("_Skipped._")
-    else:
-        for row in ood:
-            flag = "copies mix" if row.get("copies_mix") else "not a stored Assistant"
-            lines.append(f"**{row.get('typed')}** ({flag})")
-            lines.append(f"- {row.get('generated')}")
+        def _dump(title: str, pred) -> None:
+            picked = [r for r in rows if pred(r)]
             lines.append("")
+            lines.append(f"## {title}")
+            if not picked:
+                lines.append("")
+                lines.append("_None._")
+                return
+            for row in picked:
+                lines.append("")
+                lines.append(f"**{row.get('canonical')}** (`{row.get('family')}`)")
+                lines.append(f"- expected: {row.get('expected')}")
+                lines.append(f"- generated: {row.get('generated')}")
+                if row.get("swapped_from"):
+                    lines.append(f"- swapped from: {row.get('swapped_from')}")
 
-    lines += [
-        "## Mix smells (labels, not the net)",
-        "",
-        f"- dirty gold (slot missing from Assistant): {smells.get('dirty_n', 0)}",
-        f"- shared Assistant strings: {smells.get('shared_n', 0)}",
-        "",
-    ]
-    for rec in (smells.get("dirty_gold") or [])[:6]:
-        lines.append(f"- dirty: {rec.get('user')} (slot `{rec.get('slot')}`) → {rec.get('assistant')}")
-    for rec in (smells.get("shared_assistants") or [])[:6]:
-        users = ", ".join(rec.get("users") or [])
-        lines.append(f"- shared: {rec.get('assistant')} ← {users}")
+        _dump("Neighbour / entity swaps", lambda r: r.get("classification") in (
+            "BINDING_ENTITY_SWAP", "TEMPLATE_NEIGHBOUR_SWAP",
+        ))
+        _dump("Other mismatches", lambda r: r.get("classification") == "TARGET_MISMATCH")
+
+        hits = [r for r in rows if r.get("match")]
+        lines += ["", "## Hits (sample)", ""]
+        if not hits:
+            lines.append("_None._")
+        else:
+            for row in hits[:8]:
+                lines.append(f"- {row.get('canonical')} → {row.get('generated')}")
+
+        lines += ["", "## Out of mix", ""]
+        if not ood:
+            lines.append("_Skipped._")
+        else:
+            for row in ood:
+                flag = "copies mix" if row.get("copies_mix") else "not a stored Assistant"
+                lines.append(f"**{row.get('typed')}** ({flag})")
+                lines.append(f"- {row.get('generated')}")
+                lines.append("")
+
+        lines += [
+            "## Mix smells (labels, not the net)",
+            "",
+            f"- dirty gold (slot missing from Assistant): {smells.get('dirty_n', 0)}",
+            f"- shared Assistant strings: {smells.get('shared_n', 0)}",
+            "",
+        ]
+        for rec in (smells.get("dirty_gold") or [])[:6]:
+            lines.append(f"- dirty: {rec.get('user')} (slot `{rec.get('slot')}`) → {rec.get('assistant')}")
+        for rec in (smells.get("shared_assistants") or [])[:6]:
+            users = ", ".join(rec.get("users") or [])
+            lines.append(f"- shared: {rec.get('assistant')} ← {users}")
 
     lines += [
         "",
@@ -580,16 +718,24 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
             f"| {labels.get(item.action, item.action)} | "
             f"{'yes' if item.needed else 'no'} | {item.why} |"
         )
-    lines += [
-        "",
-        f"Primary: **{verdict.primary}**. "
-        + (
+    closing = (
+        "Read OOD completions for English structure, not cabinet exact. "
+        "Phase 2 later: `auto_train.py --resume` this checkpoint with a light mix. "
+        "Unguided will not resume this dir."
+        if verdict.mode == "english_foundation"
+        else (
             "This checkpoint is **memorizing**. It does **not** understand."
             if not verdict.understands
             else "Binding looks general enough to hold; still a cabinet reciter by product design."
-        ),
+        )
+    )
+    lines += [
         "",
-        "Unguided cannot resume this dir. A mix or config change needs a new `--name` and a fresh BPE.",
+        f"Primary: **{verdict.primary}**. " + closing,
+        "",
+        "Unguided cannot resume this dir. A mix or config change needs a new `--name` and a fresh BPE."
+        if verdict.mode != "english_foundation"
+        else "",
         "",
     ]
     return "\n".join(lines)

@@ -100,12 +100,11 @@ def _finalize_stop(
             payload["understands"] = verdict.understands
             payload["recitation_mode"] = verdict.mode
             logger.info(
-                "stop probe exact=%.3f swap=%.3f next=%s mode=%s understands=%s md=%s",
-                float(report.get("exact_rate") or 0.0),
-                float(report.get("swap_rate") or 0.0),
+                "stop probe mode=%s exact=%s swap=%s next=%s md=%s",
+                policy.get("probe_mode", "cabinet"),
+                report.get("exact_rate"),
+                report.get("swap_rate"),
                 verdict.primary,
-                verdict.mode,
-                verdict.understands,
                 md,
             )
         except Exception as exc:
@@ -237,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"loss_spike:    ratio={policy.get('loss_spike_ratio')}")
         print(f"remix_if:      {policy.get('remix_if')}")
         print(f"probe_on_stop: {bool(policy.get('probe_on_stop', True)) and not args.no_probe}")
+        print(f"probe_mode:    {policy.get('probe_mode', 'cabinet')}")
         print(f"probe_n:       {int(policy.get('probe_n', 50))}")
         print(f"unguarded:     {bool(args.unguarded)}")
         print("No Metal init. Exiting 0.")

@@ -179,12 +179,13 @@ python unguided_trainer.py --config setup/quicktest_config.json --policy setup/u
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json
 python unguided_trainer.py --config ... --policy ... --unguarded
+python unguided_trainer.py --config setup/english_phase1_config.json --policy setup/unguided_phase1_policy.json --name English-Phase1 --dry-run
 ```
 
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
 | `--config` | str | required | Recipe JSON (architecture + dataset). Defaults stay in the v7 recipe / autoscale, not a hardcoded B/LR. |
-| `--policy` | str | required | `setup/unguided_quicktest_policy.json` (8 steps, tiny recipe) or `setup/unguided_v7_policy.json` |
+| `--policy` | str | required | `setup/unguided_quicktest_policy.json`, `setup/unguided_v7_policy.json`, or `setup/unguided_phase1_policy.json` (`probe_mode=english`) |
 | `--dry-run` | flag | off | Print plan + param estimate; **no Metal** |
 | `--unguarded` | flag | off | Skip quarantine on a declared next-mix only. Cannot skip NaN/spike abort, stdin, or cross-BPE resume. |
 | `--max-steps` | int | policy | Override |
@@ -196,9 +197,10 @@ python unguided_trainer.py --config ... --policy ... --unguarded
 | `--no-probe` | flag | off | Skip the generate prober at stop. Policy `probe_on_stop` (v7 on, quicktest off). |
 
 At `max_steps` / wall / early_stop the kernel generate-probes the loaded net
-(`probe_n`, default 50) and writes `output/runs/<name>/generate_probe.md` plus
-`NEXT_STEP.json`. Mid-train eval stays teacher-forced + val CE. Do not run
-`unguided_prober.py` while this process holds Metal.
+and writes `output/runs/<name>/generate_probe.md` plus `NEXT_STEP.json`.
+Cabinet runs: stored keys, temp 0.2. Phase 1 English: OOD prose (~12 tokens,
+temp 0.8); mid-train is val CE only. Do not run `unguided_prober.py` while
+this process holds Metal. Do not `combine` `data/*.txt` for Phase 1.
 
 Stop App first. First Metal check is `--dry-run`, then a short run into a **new** dir.
 

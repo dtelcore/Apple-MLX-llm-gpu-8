@@ -143,8 +143,10 @@ def decide(ctx: DecideContext) -> DecideResult:
             reason=f"max_wall_s={ctx.max_wall_s}",
         )
 
+    probe_mode = str(p.get("probe_mode") or "cabinet").strip().lower()
     if (
-        remix_threshold is not None
+        probe_mode != "english"
+        and remix_threshold is not None
         and ctx.cabinet_exact_match is not None
         and ctx.step >= remix_after
         and ctx.cabinet_exact_match < float(remix_threshold)
@@ -200,6 +202,39 @@ def decide_next_step(ctx: NextStepContext) -> NextStepResult:
     teacher = ctx.cabinet_exact_match
     collapsing = tuple(ctx.collapsing_families)
     reasons: list[str] = []
+    probe_mode = str((ctx.policy or {}).get("probe_mode") or "cabinet").strip().lower()
+    if probe_mode == "english":
+        dumps = int(ctx.ood_mix_copies or 0)
+        n_ood = int(ctx.ood_n or 0)
+        dump_rate = (dumps / n_ood) if n_ood else 0.0
+        more_steps = ctx.step < ctx.max_steps
+        headline = (
+            "Phase 1 English foundation. Score OOD completions for grammar, "
+            "not cabinet exact-match."
+        )
+        reasons.append(f"val_loss={ctx.val_loss:.4f}" if ctx.val_loss is not None else "val_loss=n/a")
+        reasons.append(f"ood_dump={dumps}/{n_ood}")
+        reasons.append(f"step={ctx.step}/{ctx.max_steps}")
+        items = [
+            NextStepItem("change_data", False, "Not a cabinet run."),
+            NextStepItem("change_mix", False, "Phase 1 uses data/train.txt only."),
+            NextStepItem(
+                "more_steps",
+                more_steps,
+                "Hit max_steps before judging Phase 2." if not more_steps
+                else f"Stopped at {ctx.step}/{ctx.max_steps}; more Phase 1 steps are optional.",
+            ),
+            NextStepItem("new_config", False, "Keep C=256 L=6 until Phase 1 OOD looks like English."),
+            NextStepItem("new_policy", False, "Cabinet remix is disabled for probe_mode=english."),
+        ]
+        return NextStepResult(
+            mode="english_foundation",
+            understands=False,
+            headline=headline,
+            primary="hold" if not more_steps else "more_steps",
+            items=items,
+            reasons=reasons,
+        )
 
     understands = bool(
         exact is not None

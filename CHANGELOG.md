@@ -33,12 +33,15 @@ restart to load a promoted net.
   `decisions.jsonl`. No Metal — safe beside `unguided_trainer.py`. Do not
   Load a chat checkpoint in App while a train is running.
 - At a successful unguided stop (`max_steps` / wall / early_stop) the kernel
-  runs a cabinet generate probe on the loaded net (same temp 0.2 / top-k 10
-  as App) and writes `output/runs/<name>/generate_probe.md`. `decide_next_step()`
-  then picks change data / change mix / more steps / new config / new policy
-  from val CE + teacher-forced exact + generate exact/swaps + mix smells.
-  Standalone: `unguided_prober.py`. `--no-probe` skips it. Quicktest policy
-  leaves `probe_on_stop` off. Do not generate-every-eval.
+  runs a generate probe on the loaded net and writes
+  `output/runs/<name>/generate_probe.md`. Cabinet policies use stored `User:`
+  keys (temp 0.2). **`probe_mode=english`** (Phase 1) skips France/Paris
+  teacher-forced eval and writes OOD prose completions instead.
+  Recipe: `setup/english_phase1_config.json` on `data/train.txt` only
+  (`combine` false). Policy: `setup/unguided_phase1_policy.json`. Do not
+  `--resume` v7/v8/v9. Product chat stays `chat_facts_v7`. Standalone:
+  `unguided_prober.py`. `--no-probe` skips it. Quicktest policy leaves
+  `probe_on_stop` off. Do not generate-every-eval.
 
 ## 0.0.8
 
