@@ -56,6 +56,7 @@ python webui.py --checkpoint output/checkpoints/chat_facts_v5 --chat
 python npzviewer.py --open output/checkpoints/chat_facts_v6/weights.npz
 python trainmon.py
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
+python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
 ```
 
 Chat checkpoints default to a **Python router**: exact cabinet hit → generate the

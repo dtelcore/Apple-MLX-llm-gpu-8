@@ -3,6 +3,6 @@
   "source": "Unguarded-Initialv7-Run",
   "source_name": "Unguarded-Initialv7-Run",
   "metric": "val_loss",
-  "value": 2.70021253824234,
-  "step": 75
+  "value": 1.3988258391618729,
+  "step": 175
 }

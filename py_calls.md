@@ -85,7 +85,7 @@ v0.0.7: `interactive.py` router (cabinet → calc → Wikipedia). Chat checkpoin
 
 v0.0.8: `App.py` (selector + `/chat` + `/weights`). Related trained follow-ups after generate. npzviewer pick-a-neuron. v7 linked mix from scratch — do not `--resume` v6.
 
-v0.0.9: `unguided_trainer.py` + `autotrainer_daemon.py` + `trainmon.py` (7862 / App **Train** tab). No stdin. Fresh BPE per harvest mix. Log monitor is host-only. Do not `--resume` v7 into a new mix.
+v0.0.9: `unguided_trainer.py` + `unguided_prober.py` + `autotrainer_daemon.py` + `trainmon.py` (7862 / App **Train** tab). No stdin. Fresh BPE per harvest mix. Log monitor is host-only. Do not `--resume` v7 into a new mix.
 
 ### Generate probes `(shared: probe)`
 
@@ -193,8 +193,36 @@ python unguided_trainer.py --config ... --policy ... --unguarded
 | `--name` | str | policy | Fresh basename: `output/runs/<name>` + `output/checkpoints/<name>` |
 | `--run-name` | str | policy | `output/runs/<name>` only |
 | `--checkpoint-dir` | str | policy | Weights dir (must have no `weights.npz`) |
+| `--no-probe` | flag | off | Skip the generate prober at stop. Policy `probe_on_stop` (v7 on, quicktest off). |
+
+At `max_steps` / wall / early_stop the kernel generate-probes the loaded net
+(`probe_n`, default 50) and writes `output/runs/<name>/generate_probe.md` plus
+`NEXT_STEP.json`. Mid-train eval stays teacher-forced + val CE. Do not run
+`unguided_prober.py` while this process holds Metal.
 
 Stop App first. First Metal check is `--dry-run`, then a short run into a **new** dir.
+
+### `unguided_prober.py`
+
+After a run (or on a leftover checkpoint) generate 25–50 stored cabinet keys
+with App settings, score exact / neighbour swap, probe a few out-of-mix
+prompts, and write the same markdown report. `--dry-run` selects prompts only.
+
+```text
+python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
+python unguided_prober.py --checkpoint output/checkpoints/Unguarded-Initialv7-Run-2 --n 50
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--checkpoint` | str | | Dir with `weights.npz` |
+| `--name` | str | | `output/checkpoints/<name>` + `output/runs/<name>` |
+| `--facts` | str | recipe / v7 | Trained cabinet only (no learned wiki overlay) |
+| `--n` | int | `50` | Cabinet generates |
+| `--dry-run` | flag | off | **No Metal** |
+
+Stop App and the trainer first. Unguided cannot resume that dir; the report
+says whether to change data, remix, step longer, or change C/L/T / policy.
 
 ### `autotrainer_daemon.py`
 
@@ -807,7 +835,8 @@ These are imported by the entry points above; they have no project-facing argpar
 |---------|---------|
 | `train.py` | Train / resume / generate menu / quality |
 | `auto_train.py` | Train + smoke generate |
-| `unguided_trainer.py` | Unattended train kernel (no stdin) |
+| `unguided_trainer.py` | Unattended train kernel (no stdin); generate probe at stop |
+| `unguided_prober.py` | Cabinet generate probe + next-step markdown |
 | `autotrainer_daemon.py` | Harvest retrain log, spawn kernel, gate, promote |
 | `generate_config.py` | Interactive `setup/*.json` recipe writer (C/H/L/T/B, 2 GB estimate) |
 | `tools/make_fact_mix.py` | Repeat user/Wikidata facts → `data/chat_facts.jsonl` |

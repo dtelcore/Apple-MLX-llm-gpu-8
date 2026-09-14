@@ -56,6 +56,65 @@ def _write_summary(run_dir: Path, payload: dict) -> None:
     (run_dir / "eval_summary.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _finalize_stop(
+    session,
+    policy: dict,
+    run_dir: Path,
+    last_eval: dict | None,
+    action: str,
+    reason: str,
+    *,
+    max_steps: int,
+    skip_probe: bool,
+) -> None:
+    """Write stop artifacts. On a clean stop, generate-probe then decide the next step."""
+    payload = {
+        **(last_eval or {}),
+        "final_step": session.step,
+        "best_val_loss": session.best_val_loss,
+        "action": action,
+        "reason": reason,
+    }
+    if not skip_probe:
+        try:
+            from training.unguided.decide import decide_next_step
+            from training.unguided.prober import next_step_context, run_session_probe, write_probe_reports
+
+            logger.info("stop probe | step=%s n=%s", session.step, policy.get("probe_n", 50))
+            report = run_session_probe(session, policy)
+            if last_eval and last_eval.get("cabinet_exact_match") is not None:
+                report["teacher_forced"] = last_eval.get("cabinet_exact_match")
+            verdict = decide_next_step(
+                next_step_context(
+                    step=session.step,
+                    max_steps=max_steps,
+                    policy=policy,
+                    last_eval=last_eval,
+                    report=report,
+                )
+            )
+            md = write_probe_reports(run_dir, report, verdict)
+            payload["generate_exact_rate"] = report.get("exact_rate")
+            payload["generate_swap_rate"] = report.get("swap_rate")
+            payload["next_step"] = verdict.primary
+            payload["understands"] = verdict.understands
+            payload["recitation_mode"] = verdict.mode
+            logger.info(
+                "stop probe exact=%.3f swap=%.3f next=%s mode=%s understands=%s md=%s",
+                float(report.get("exact_rate") or 0.0),
+                float(report.get("swap_rate") or 0.0),
+                verdict.primary,
+                verdict.mode,
+                verdict.understands,
+                md,
+            )
+        except Exception as exc:
+            logger.warning("stop probe failed: %s", exc)
+            payload["probe_error"] = str(exc)
+    _write_abort(run_dir, reason)
+    _write_summary(run_dir, payload)
+
+
 def _dry_run_param_estimate(recipe: dict) -> dict:
     from setup.model_config import estimate_vram_footprint
 
@@ -96,6 +155,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=None,
         help="Override policy checkpoint_dir (must be empty / no weights.npz)",
+    )
+    parser.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="Skip the generate prober at max_steps / early_stop / wall",
     )
     return parser.parse_args(argv)
 
@@ -172,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"early_stop:    patience={policy.get('early_stop_patience')}")
         print(f"loss_spike:    ratio={policy.get('loss_spike_ratio')}")
         print(f"remix_if:      {policy.get('remix_if')}")
+        print(f"probe_on_stop: {bool(policy.get('probe_on_stop', True)) and not args.no_probe}")
+        print(f"probe_n:       {int(policy.get('probe_n', 50))}")
         print(f"unguarded:     {bool(args.unguarded)}")
         print("No Metal init. Exiting 0.")
         return 0
@@ -181,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     from training.unguided.eval_suite import run_eval_suite
     from training.unguided.loop import train_segment
     from training.unguided.session import build_train_session, make_train_args
+
+    skip_probe = bool(args.no_probe) or not bool(policy.get("probe_on_stop", True))
 
     train_args = make_train_args(
         config_path, checkpoint_dir, policy, unguarded=bool(args.unguarded),
@@ -214,16 +282,16 @@ def main(argv: list[str] | None = None) -> int:
                 "promote": False,
             }
             _append_decision(run_dir, rec)
-            _write_abort(run_dir, result_reason)
-            summary = {
-                "final_step": session.step,
-                "best_val_loss": session.best_val_loss,
-                "action": result_action.value,
-                "reason": result_reason,
-            }
-            if last_eval is not None:
-                summary.update(last_eval)
-            _write_summary(run_dir, summary)
+            _finalize_stop(
+                session,
+                policy,
+                run_dir,
+                last_eval,
+                result_action.value,
+                result_reason,
+                max_steps=max_steps,
+                skip_probe=skip_probe,
+            )
             return 0
 
         metrics = train_segment(session, min(eval_every, remaining))
@@ -314,17 +382,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         if result.action in (Decision.EARLY_STOP, Decision.STOP_LIMIT):
-            _write_abort(run_dir, result.reason)
             logger.info("Stopping: %s", result.reason)
-            _write_summary(
+            _finalize_stop(
+                session,
+                policy,
                 run_dir,
-                {
-                    **(last_eval or {}),
-                    "final_step": session.step,
-                    "best_val_loss": session.best_val_loss,
-                    "action": result.action.value,
-                    "reason": result.reason,
-                },
+                last_eval,
+                result.action.value,
+                result.reason,
+                max_steps=max_steps,
+                skip_probe=skip_probe,
             )
             return 0
 

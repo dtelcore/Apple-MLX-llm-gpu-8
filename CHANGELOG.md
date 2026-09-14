@@ -32,6 +32,13 @@ restart to load a promoted net.
   rolling-std, color = loss). Reads `output/logs/*.log` and overlays
   `decisions.jsonl`. No Metal — safe beside `unguided_trainer.py`. Do not
   Load a chat checkpoint in App while a train is running.
+- At a successful unguided stop (`max_steps` / wall / early_stop) the kernel
+  runs a cabinet generate probe on the loaded net (same temp 0.2 / top-k 10
+  as App) and writes `output/runs/<name>/generate_probe.md`. `decide_next_step()`
+  then picks change data / change mix / more steps / new config / new policy
+  from val CE + teacher-forced exact + generate exact/swaps + mix smells.
+  Standalone: `unguided_prober.py`. `--no-probe` skips it. Quicktest policy
+  leaves `probe_on_stop` off. Do not generate-every-eval.
 
 ## 0.0.8
 

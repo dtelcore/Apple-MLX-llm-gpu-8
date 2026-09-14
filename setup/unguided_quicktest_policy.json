@@ -18,6 +18,8 @@
     "after_steps": 1000000,
     "action": "abort_remix"
   },
+  "probe_on_stop": false,
+  "probe_n": 8,
   "hard_limits": {
     "refuse_resume_on_vocab_mismatch": true,
     "refuse_existing_v6_v4_dir": true,

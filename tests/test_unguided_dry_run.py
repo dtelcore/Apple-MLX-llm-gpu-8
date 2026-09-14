@@ -49,6 +49,8 @@ class DryRunTests(unittest.TestCase):
         self.assertIn("No Metal init", out)
         self.assertIn("eval_every", out)
         self.assertIn("log_every:", out)
+        self.assertIn("probe_on_stop:", out)
+        self.assertIn("probe_n:", out)
         self.assertIn("No Metal init", out)
 
     def test_name_flags_override_dirs(self):
