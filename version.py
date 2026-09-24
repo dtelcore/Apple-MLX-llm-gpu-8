@@ -1,4 +1,4 @@
-"""Project version. Pre-0.1.0 work is treated as 0.0.x–0.9.9."""
+"""Project version. 0.1.0 is the hybrid-learner re-architecture."""
 
 from pathlib import Path
 

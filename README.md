@@ -4,37 +4,32 @@ From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
 
-**v0.0.9** — unguided trainer + autotrainer daemon. **v0.0.8** — **App.py** (chat + weight viewer + model selector), related
-cabinet follow-ups, pick-a-neuron. Router is from 0.0.7 (cabinet → calc →
-Wikipedia). **2 GB** process budget (hardcoded). Soft machine guard: **5.5 GB**.
-Fact pipelines are from 0.0.6; layer streaming is from 0.0.5.
+**v0.1.0** — hybrid learner: frozen fact cabinet + separate TinyStories English
+brain. **v0.0.9** — unguided trainer + autotrainer daemon. **v0.0.8** — **App.py**
+(chat + weight viewer + model selector). Router is from 0.0.7 (cabinet → calc →
+English generate → Wikipedia). **2 GB** process budget (hardcoded). Soft machine
+guard: **5.5 GB**. Fact pipelines are from 0.0.6; layer streaming is from 0.0.5.
 
 
-## Where this sits vs GPT-2
+## Where this sits
 
-Hand VJPs, a hardcoded **2 GB** Metal budget (layer streaming), and a Python router
-(cabinet → calc → Wikipedia) make this an **instrumented research GPT**, not a
-black-box mini ChatGPT. Forward cost scales roughly like `L * T * C^2`;
-precise TFLOPs depend on stream vs resident and are not quoted here.
+Two brains, one Python router. This is an **instrumented research GPT**, not a
+black-box mini ChatGPT. Hand VJPs and a hardcoded **2 GB** Metal budget stay.
 
-| | **chat_facts_v4** | **chat_facts_v7** | **GPT-2 small** |
+| | **Fact brain** | **English brain** | **Router** |
 |---|---|---|---|
-| Width / depth | C=512 · **L=6** · H=8 | C=512 · **L=16** · H=8 | C=768 · L=12 · H=12 |
-| Context `T` | 256 | 512 | 1024 |
-| Vocab | ~1587 (mix BPE) | 4086 | 50257 |
-| Params (counted) | **20.5M** | **54.6M** | ~124M |
-| Weights on disk | ~82 MB | ~219 MB | (release artifacts) |
-| Pos / norm | RoPE · RMSNorm | RoPE · RMSNorm | learned pos · LayerNorm |
-| Gradients | explicit VJPs | explicit VJPs | framework autograd |
-| Layer strategy | stream | stream | resident |
-| Train steps / loss | 400 · ~0.033 | 1000 · ~0.039 | web-text LM (not comparable) |
-| Objective | closed fact cabinet | linked cabinet + related UX | open web text |
-| Best for | clean recitation (France→Paris) | product checkpoint + App | general English |
+| Role | Frozen recitation cabinet | Open English (TinyStories) | Python, inspectable |
+| Checkpoint | `chat_facts_v7` / v9 | `english_tinystories_*` | — |
+| Shape | C=512 · L=16 · T=512 | C=256 · L=6 · T=256 first | — |
+| Vocab | Cabinet BPE (~4k) | TinyStories-only BPE (4–8k) | — |
+| Objective | Exact `User:` → stored answer | Coherent multi-sentence text | cabinet → calc → English → wiki/tools |
+| Status | Product; do not train more v7 | Active learning path | Unchanged kernel |
 
-**v7 ≈ half of GPT-2 small in params**, half the context, ~1/12 the vocab — in the
-“serious small transformer” band — but trained for **recitation**, not open-ended LM.
-**v4** remains the cleanest small-cabinet baseline; do not `--resume` v4/v6/v7 across
-vocab or mix changes. Do not train more v7 or rebuild its mix for alias fixes.
+Do not `--resume` across vocab, architecture, or mix changes. Do not resume a
+cabinet BPE into TinyStories. Do not train more v7 or rebuild its mix for alias
+fixes. Pre-0.1.0 English runs (`english_phase1` on wiki prose, fact-inject, v10
+mixes) live under [`legacy/`](legacy/README_legacy.md). `data/train.txt` is not
+the English corpus.
 
 
 ```bash
@@ -57,10 +52,13 @@ python npzviewer.py --open output/checkpoints/chat_facts_v6/weights.npz
 python trainmon.py
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
 python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
+python tools/prepare_tinystories.py
+python unguided_trainer.py --config setup/english_tinystories_c256_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
 ```
 
 Chat checkpoints default to a **Python router**: exact cabinet hit → generate the
-stored `User: … Assistant:` line; `2+2` → Decimal calc; after a generate turn,
+stored `User: … Assistant:` line; `2+2` → Decimal calc; otherwise the English
+brain (TinyStories) when that checkpoint is loaded; after a generate turn,
 unknown follow-ups list **related trained questions** (UI chips / `:related`)
 instead of auto-Wikipedia; `:search` or a cold-start `What is …` still hits
 Wikipedia. Wikipedia hits are appended to `output/cabinet_learned.jsonl`
@@ -75,9 +73,12 @@ in one process.
 `--no-search` skips the network. Do not `combine` `data/*.txt`. Do not
 `--resume` v6 into v7.
 
-Stable English recipe on this Air: `setup/story_c256_l6_config.json`
-(C=256, L=6, T=256, batch 4, accum 4, GPT-2 residual scale). Smaller smoke:
-`setup/story_sub1m_config.json` (C=128, L=4, T=128, batch 8).
+Active English recipe: `setup/english_tinystories_c256_l6_config.json` on
+`data/tinystories/` after `python tools/prepare_tinystories.py` (C=256, L=6,
+T=256, batch 4, accum 4, GPT-2 residual scale, TinyStories-only BPE). Older
+shape references: `setup/story_c256_l6_config.json` and
+`setup/story_sub1m_config.json`. Wiki-prose Phase 1 / v10 commands are under
+[`legacy/`](legacy/README_legacy.md).
 
 Chat cabinet (memorize your Q&A, not Wikipedia): native lines in
 `data/user_facts.txt` and `data/facts/*.txt`, mix with `tools/make_fact_mix.py`,
@@ -91,7 +92,7 @@ Live path: `model/mlx/ops.py` (forward primitives + hand VJPs). Do not use
 `mx.value_and_grad`, `mlx.nn`, or `mlx.optimizers` on the train loop.
 
 
-## Progress (0.0.1 → 0.0.9)
+## Progress (0.0.1 → 0.1.0)
 
 Software (see `CHANGELOG.md` for detail):
 
@@ -105,6 +106,7 @@ Software (see `CHANGELOG.md` for detail):
 | 0.0.7 | Router (cabinet → calc → Wikipedia) + web UI |
 | 0.0.8 | `App.py` (chat + pick-a-neuron + selector), related chips, topic/`the` aliases |
 | 0.0.9 | Unguided trainer kernel + autotrainer daemon + train monitor |
+| 0.1.0 | Dual brain: frozen v7/v9 cabinet + TinyStories English; wiki-prose English → `legacy/` |
 
 Cabinet checkpoints under `output/checkpoints/`:
 

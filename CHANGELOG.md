@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.0 — Re-architecture: from closed cabinet to hybrid learner
+
+Product chat remains `chat_facts_v7` / v9 (frozen fact brain).
+Router, App, memory controller, streaming, and the unguided kernel stay.
+
+New primary objective: open English on a TinyStories-scale corpus so the
+generative path can produce coherent multi-sentence text. Cabinet + Python
+tools stay the high-reliability core. English model is a separate checkpoint
+family (`english_tinystories_*`).
+
+Pre-0.1.0 English experiments (english_phase1 on wiki prose, early fact-inject,
+v10 mixes) move to `legacy/`. They demonstrated that the wrong corpus does not
+teach open English; they are not the active path.
+
+Next gates (after story continuations of 100–200 tokens are consistent):
+tool expansion (notes / files / calendar) and a short same-tokenizer SFT that
+rewrites cabinet facts as conversation. Arithmetic remains `tools/calc.py`.
+
 ## 0.0.9
 
 Unguided trainer kernel and autotrainer daemon (no stdin). Fresh checkpoint

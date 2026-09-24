@@ -1,7 +1,12 @@
 # py_calls.md — runnable entry points
 
-**Apple MLX (this tree, v0.0.9):** MacBook Air M3, 2 GB process cap. Start with
+**Apple MLX (this tree, v0.1.0):** MacBook Air M3, 2 GB process cap. Start with
 [`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
+
+Phase 1 wiki-prose English and v10 fact+wiki mixes are no longer the active
+English path. Those configs, builders, and commands live under [`legacy/`](legacy/README_legacy.md).
+Active English recipe: `setup/english_tinystories_c256_l6_config.json` after
+`python tools/prepare_tinystories.py`. Product chat stays `chat_facts_v7`.
 
 Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
 
@@ -87,6 +92,8 @@ v0.0.8: `App.py` (selector + `/chat` + `/weights`). Related trained follow-ups a
 
 v0.0.9: `unguided_trainer.py` + `unguided_prober.py` + `autotrainer_daemon.py` + `trainmon.py` (7862 / App **Train** tab). No stdin. Fresh BPE per harvest mix. Log monitor is host-only. Do not `--resume` v7 into a new mix.
 
+v0.1.0: dual brain. Product chat stays `chat_facts_v7`. Active English is TinyStories (`setup/english_tinystories_c256_l6_config.json`). Phase 1 / v10 commands are under `legacy/`.
+
 ### Generate probes `(shared: probe)`
 
 | Flag | Type | Default |
@@ -166,28 +173,15 @@ python train.py --tokenizer char --menu   # opt into character tokenizer
 python train.py --generate --models-dir output\checkpoints
 python train.py --compare-quarters --checkpoint output\checkpoints\BiggerTest256256
 
-# Phase 2 inject (after English-Phase1 finishes). Same BPE. Unguided cannot resume.
-python tools/build_english_phase2_mix.py
-python auto_train.py --resume --checkpoint output/checkpoints/English-Phase1 \
-  --dataset-path data/english_phase2_mix.txt --reset-lr-schedule \
-  --learning-rate 5e-5 --steps 1500 --val-every 50 --no-prompt \
-  --prompt "Photosynthesis is a process where plants" --max-new-tokens 40
-python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject
+# Active English (TinyStories). Do not --resume a cabinet BPE.
+python tools/prepare_tinystories.py
+python unguided_trainer.py --config setup/english_tinystories_c256_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
+python unguided_prober.py --checkpoint output/checkpoints/english_tinystories_c256_l6 --probe-mode tinystories --dry-run
 
-# Phase 2b dense inject (geo/organ/prime ~15%, same BPE). Leaves phase2 mix on disk.
-python tools/build_english_phase2_mix.py --dense
-python auto_train.py --resume --checkpoint output/checkpoints/English-Phase1 \
-  --dataset-path data/english_phase2b_mix.txt --reset-lr-schedule \
-  --learning-rate 6e-5 --steps 1500 --val-every 50 --no-prompt \
-  --prompt "Photosynthesis is a process where plants" --max-new-tokens 40
-python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject
-
-# v10 integration mix (fresh BPE). Do not --resume English-Phase1 / v7 / v8 / v9.
-python tools/build_chat_facts_v10.py
-python unguided_trainer.py --config setup/chat_facts_v10_config.json --policy setup/unguided_v10_policy.json --name chat_facts_v10_7 --dry-run
-python unguided_trainer.py --config setup/chat_facts_v10_config.json --policy setup/unguided_v10_policy.json --name chat_facts_v10_7 --log-every 1
-python unguided_prober.py --checkpoint output/checkpoints/chat_facts_v10 --probe-mode inject
-python unguided_prober.py --checkpoint output/checkpoints/chat_facts_v10 --config setup/chat_facts_v10_config.json
+# Legacy Phase 2 / v10 (wrong corpus). See legacy/README_legacy.md.
+python legacy/v10_attempts/tools/build_english_phase2_mix.py
+python legacy/v10_attempts/tools/build_chat_facts_v10.py
+python unguided_trainer.py --config legacy/v10_attempts/setup/chat_facts_v10_config.json --policy legacy/v10_attempts/setup/unguided_v10_policy.json --dry-run
 ```
 
 ---
@@ -204,14 +198,14 @@ python unguided_trainer.py --config setup/quicktest_config.json --policy setup/u
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
 python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json
 python unguided_trainer.py --config ... --policy ... --unguarded
-python unguided_trainer.py --config setup/english_phase1_config.json --policy setup/unguided_phase1_policy.json --name English-Phase1 --dry-run
-python unguided_trainer.py --config setup/chat_facts_v10_config.json --policy setup/unguided_v10_policy.json --name chat_facts_v10_7 --dry-run
+python unguided_trainer.py --config setup/english_tinystories_c256_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
+python unguided_trainer.py --config legacy/english_phase1/setup/english_phase1_config.json --policy legacy/english_phase1/setup/unguided_phase1_policy.json --name English-Phase1 --dry-run
 ```
 
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
 | `--config` | str | required | Recipe JSON (architecture + dataset). Defaults stay in the v7 recipe / autoscale, not a hardcoded B/LR. |
-| `--policy` | str | required | `setup/unguided_quicktest_policy.json`, `setup/unguided_v7_policy.json`, `setup/unguided_phase1_policy.json` (`probe_mode=english`), or `setup/unguided_v10_policy.json` (`probe_mode=inject`) |
+| `--policy` | str | required | `setup/unguided_quicktest_policy.json`, `setup/unguided_v7_policy.json`, `setup/unguided_tinystories_policy.json` (`probe_mode=tinystories`). Legacy Phase 1 / v10 policies live under `legacy/`. |
 | `--dry-run` | flag | off | Print plan + param estimate; **no Metal** |
 | `--unguarded` | flag | off | Skip quarantine on a declared next-mix only. Cannot skip NaN/spike abort, stdin, or cross-BPE resume. |
 | `--max-steps` | int | policy | Override |
@@ -224,9 +218,9 @@ python unguided_trainer.py --config setup/chat_facts_v10_config.json --policy se
 
 At `max_steps` / wall / early_stop the kernel generate-probes the loaded net
 and writes `output/runs/<name>/generate_probe.md` plus `NEXT_STEP.json`.
-Cabinet runs: stored keys, temp 0.2. Phase 1 English: OOD prose (~12 tokens,
-temp 0.8); mid-train is val CE only. Do not run `unguided_prober.py` while
-this process holds Metal. Do not `combine` `data/*.txt` for Phase 1.
+Cabinet runs: stored keys, temp 0.2. TinyStories: 160-token open prompts at
+temp 0.8 every `probe_every` steps. Do not run `unguided_prober.py` while
+this process holds Metal. Do not `combine` `data/*.txt`.
 
 Stop App first. First Metal check is `--dry-run`, then a short run into a **new** dir.
 
@@ -239,10 +233,7 @@ prompts, and write the same markdown report. `--dry-run` selects prompts only.
 ```text
 python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
 python unguided_prober.py --checkpoint output/checkpoints/Unguarded-Initialv7-Run-2 --n 50
-python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject --dry-run
-python unguided_prober.py --checkpoint output/checkpoints/English-Phase1 --probe-mode inject
-python unguided_prober.py --checkpoint output/checkpoints/chat_facts_v10 --probe-mode inject
-python unguided_prober.py --checkpoint output/checkpoints/chat_facts_v10 --config setup/chat_facts_v10_config.json
+python unguided_prober.py --checkpoint output/checkpoints/english_tinystories_c256_l6 --probe-mode tinystories --dry-run
 ```
 
 | Flag | Type | Default | Notes |
@@ -252,7 +243,7 @@ python unguided_prober.py --checkpoint output/checkpoints/chat_facts_v10 --confi
 | `--facts` | str | recipe / v7 | Trained cabinet only (no learned wiki overlay) |
 | `--n` | int | `50` | Cabinet generates |
 | `--dry-run` | flag | off | **No Metal** |
-| `--probe-mode` | str | `cabinet` | `cabinet`, `english` (Phase 1 OOD), `inject` (held-out frames + OOD → `inject_probe.md`; v10 stop also writes stored `User:` `generate_probe.md`) |
+| `--probe-mode` | str | `cabinet` | `cabinet`, `tinystories` (160-token open English), plus legacy `english` / `inject` |
 
 Stop App and the trainer first. Unguided cannot resume that dir; the report
 says whether to change data, remix, step longer, or change C/L/T / policy.
