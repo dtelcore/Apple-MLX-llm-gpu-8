@@ -145,7 +145,7 @@ def decide(ctx: DecideContext) -> DecideResult:
 
     probe_mode = str(p.get("probe_mode") or "cabinet").strip().lower()
     if (
-        probe_mode not in {"english", "inject"}
+        probe_mode not in {"english", "inject", "tinystories"}
         and remix_threshold is not None
         and ctx.cabinet_exact_match is not None
         and ctx.step >= remix_after
@@ -203,12 +203,22 @@ def decide_next_step(ctx: NextStepContext) -> NextStepResult:
     collapsing = tuple(ctx.collapsing_families)
     reasons: list[str] = []
     probe_mode = str((ctx.policy or {}).get("probe_mode") or "cabinet").strip().lower()
-    if probe_mode in {"english", "inject"}:
+    if probe_mode in {"english", "inject", "tinystories"}:
         dumps = int(ctx.ood_mix_copies or 0)
         n_ood = int(ctx.ood_n or 0)
         dump_rate = (dumps / n_ood) if n_ood else 0.0
         more_steps = ctx.step < ctx.max_steps
-        if probe_mode == "inject":
+        if probe_mode == "tinystories":
+            headline = (
+                "TinyStories English. Score 160-token story continuations for "
+                "coherent characters and grammar. Val loss will stay above the "
+                "cabinet's 0.03. 10k steps is not a stopping point."
+            )
+            mix_why = "TinyStories only. Do not mix wiki prose or cabinet facts."
+            config_why = "Keep C=256 L=6 until 100–200 token stories stay consistent."
+            policy_why = "Cabinet remix is disabled for probe_mode=tinystories."
+            mode_name = "tinystories_english"
+        elif probe_mode == "inject":
             headline = (
                 "v10 integration probe. Score paraphrased Paris/kidney/prime "
                 "and valley/photosynthesis English. Neighbour Belgium on a "

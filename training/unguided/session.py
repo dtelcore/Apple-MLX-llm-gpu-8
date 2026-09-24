@@ -152,7 +152,7 @@ def build_train_session(args, policy: dict) -> TrainSession:
     from model.gpt import GPTModel
     from model.weights import ModelParameters
     from paths import ensure_output_dirs, run_root_for_checkpoint
-    from train import _build_windowed_dataset, build_tokenizer_and_config
+    from train import _build_prebuilt_windowed_dataset, _build_windowed_dataset, build_tokenizer_and_config
     import cli_common
     from training.eval import ensure_train_val_split
     from training.gpu_optimizer import AdamWGPU
@@ -193,7 +193,13 @@ def build_train_session(args, policy: dict) -> TrainSession:
     if args.steps is None and args.epochs is None:
         args.steps = int(policy.get("max_steps", 500))
 
-    train_corpus, val_corpus = ensure_train_val_split(config, seed=args.seed)
+    from training.tinystories_tokens import dataset_uses_prebuilt_tokens
+
+    prebuilt_tokens = dataset_uses_prebuilt_tokens(config.get("dataset"))
+    if prebuilt_tokens:
+        train_corpus, val_corpus = [], []
+    else:
+        train_corpus, val_corpus = ensure_train_val_split(config, seed=args.seed)
     grad_accum = max(1, int(hyperparams.get("gradient_accumulation_steps", 1)))
     hyperparams["gradient_accumulation_steps"] = grad_accum
     if getattr(args, "min_lr_ratio", None) is not None:
@@ -215,20 +221,36 @@ def build_train_session(args, policy: dict) -> TrainSession:
         seed=args.seed,
     )
     model = GPTModel(gpt_config, params)
-    dataset = _build_windowed_dataset(
-        train_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
-        window_stride, run_dir, "train",
-    )
-    val_dataset = None
-    if val_corpus:
+    if prebuilt_tokens:
+        token_dir = str((config.get("dataset") or {}).get("token_dir"))
+        dataset = _build_prebuilt_windowed_dataset(
+            tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+            window_stride, token_dir, "train",
+        )
+        val_dataset = None
         try:
-            val_dataset = _build_windowed_dataset(
-                val_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
-                window_stride, run_dir, "val",
+            val_dataset = _build_prebuilt_windowed_dataset(
+                tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+                window_stride, token_dir, "valid",
             )
-        except ValueError as exc:
-            logger.warning("Val dataset too small for windows; skipping val eval: %s", exc)
+        except (ValueError, FileNotFoundError) as exc:
+            logger.warning("Prebuilt val tokens skipped: %s", exc)
             val_dataset = None
+    else:
+        dataset = _build_windowed_dataset(
+            train_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+            window_stride, run_dir, "train",
+        )
+        val_dataset = None
+        if val_corpus:
+            try:
+                val_dataset = _build_windowed_dataset(
+                    val_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+                    window_stride, run_dir, "val",
+                )
+            except ValueError as exc:
+                logger.warning("Val dataset too small for windows; skipping val eval: %s", exc)
+                val_dataset = None
 
     total_steps = int(args.steps or policy.get("max_steps", 500))
     optimizer = AdamWGPU(

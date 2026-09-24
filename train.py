@@ -147,6 +147,24 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def build_tokenizer_and_config(config: dict, args: Optional[argparse.Namespace] = None) -> tuple:
     from setup.config_loader import resolve_dataset_corpus
+    from tokenizer.factory import load_tokenizer
+    from training.tinystories_tokens import dataset_uses_prebuilt_tokens, resolve_vocab_path
+
+    if dataset_uses_prebuilt_tokens(config.get("dataset")):
+        tokenizer = load_tokenizer(resolve_vocab_path(config["dataset"]))
+        config["dataset"]["corpus"] = []
+        config["dataset"]["tokenizer"] = tokenizer_kind_from_config(config.get("dataset"), args)
+        if config["dataset"]["tokenizer"] == "bpe":
+            config["dataset"]["bpe_merges"] = bpe_merges_from_config(config.get("dataset"), args)
+        configured_vocab = config["model"].get("vocab_size")
+        if configured_vocab != tokenizer.vocab_size:
+            logger.warning(
+                f"Config vocab_size ({configured_vocab}) != tokenizer vocab_size "
+                f"({tokenizer.vocab_size}); overriding config to match tokenizer."
+            )
+            config["model"]["vocab_size"] = tokenizer.vocab_size
+        gpt_config = GPTConfig(config["model"])
+        return tokenizer, gpt_config
 
     data_dir = getattr(args, "data_dir", None) if args is not None else None
     corpus = resolve_dataset_corpus(config["dataset"], data_dir=data_dir)
@@ -211,6 +229,23 @@ def _build_windowed_dataset(
     if tokens is None:
         save_tokens(npy_path, meta_path, dataset.tokens, expected)
     return dataset
+
+
+def _build_prebuilt_windowed_dataset(
+    tokenizer,
+    max_len: int,
+    batch_size: int,
+    window_stride: int,
+    token_dir: str,
+    split: str,
+) -> WindowedDataset:
+    from training.tinystories_tokens import load_split_tokens
+
+    tokens = load_split_tokens(token_dir, split)
+    return WindowedDataset(
+        [], tokenizer, max_len, batch_size,
+        window_stride=window_stride, tokens=tokens, copy_tokens=False,
+    )
 
 
 def _force_quarter_traces(tracer: TraceContext) -> Dict:
@@ -591,8 +626,15 @@ def train(args: argparse.Namespace) -> str:
             force_stream=bool(getattr(args, "layer_stream", False)),
         )
 
+    from training.tinystories_tokens import dataset_uses_prebuilt_tokens
+
+    prebuilt_tokens = dataset_uses_prebuilt_tokens(config.get("dataset"))
+
     # 90/10 val holdout (stable across resume when val_corpus.json is present).
-    train_corpus, val_corpus = ensure_train_val_split(config, seed=args.seed)
+    if prebuilt_tokens:
+        train_corpus, val_corpus = [], []
+    else:
+        train_corpus, val_corpus = ensure_train_val_split(config, seed=args.seed)
 
     # Length prompts: menu Length group already asked; otherwise keep legacy prompt.
     if not (getattr(args, "menu", False) and "length" in menu_selected):
@@ -639,28 +681,48 @@ def train(args: argparse.Namespace) -> str:
         print(f"WARNING: {dropout_warn}")
         logger.warning(dropout_warn)
 
-    logger.info(
-        "Building windowed train dataset (%s sentences, max_len=%s, stride=%s)...",
-        len(train_corpus), gpt_config.max_len, window_stride,
-    )
-    dataset = _build_windowed_dataset(
-        train_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
-        window_stride, run_dir, "train",
-    )
-    val_dataset = None
-    if val_corpus:
+    if prebuilt_tokens:
+        token_dir = str((config.get("dataset") or {}).get("token_dir"))
+        logger.info(
+            "Building windowed train dataset from prebuilt tokens %s (max_len=%s, stride=%s)...",
+            token_dir, gpt_config.max_len, window_stride,
+        )
+        dataset = _build_prebuilt_windowed_dataset(
+            tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+            window_stride, token_dir, "train",
+        )
+        val_dataset = None
         try:
-            logger.info(
-                "Building windowed val dataset (%s sentences)...",
-                len(val_corpus),
+            val_dataset = _build_prebuilt_windowed_dataset(
+                tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+                window_stride, token_dir, "valid",
             )
-            val_dataset = _build_windowed_dataset(
-                val_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
-                window_stride, run_dir, "val",
-            )
-        except ValueError as exc:
-            logger.warning("Val dataset too small for windows; skipping val eval: %s", exc)
+        except (ValueError, FileNotFoundError) as exc:
+            logger.warning("Prebuilt val tokens skipped: %s", exc)
             val_dataset = None
+    else:
+        logger.info(
+            "Building windowed train dataset (%s sentences, max_len=%s, stride=%s)...",
+            len(train_corpus), gpt_config.max_len, window_stride,
+        )
+        dataset = _build_windowed_dataset(
+            train_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+            window_stride, run_dir, "train",
+        )
+        val_dataset = None
+        if val_corpus:
+            try:
+                logger.info(
+                    "Building windowed val dataset (%s sentences)...",
+                    len(val_corpus),
+                )
+                val_dataset = _build_windowed_dataset(
+                    val_corpus, tokenizer, gpt_config.max_len, hyperparams["batch_size"],
+                    window_stride, run_dir, "val",
+                )
+            except ValueError as exc:
+                logger.warning("Val dataset too small for windows; skipping val eval: %s", exc)
+                val_dataset = None
 
     rng = np.random.default_rng(args.seed)
     steps_per_epoch = dataset.num_batches()

@@ -22,6 +22,7 @@ class WindowedDataset:
         batch_size: int,
         window_stride: int = 1,
         tokens: Optional[np.ndarray] = None,
+        copy_tokens: bool = True,
     ) -> None:
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -31,7 +32,12 @@ class WindowedDataset:
         # Prefer a resume cache (tokens.npy) so BPE encode is not repeated.
         # Else streaming encode (BPE): avoids " ".join of entire TinyStories
         # (~100M chars) and reuses a per-word encode cache across docs.
-        if tokens is not None:
+        if tokens is not None and (
+            not copy_tokens or getattr(tokens, "keep_memmap", False)
+        ):
+            self.tokens = tokens
+            logger.info("Using prebuilt token stream (%s tokens, no host copy)", len(self.tokens))
+        elif tokens is not None:
             self.tokens = np.asarray(tokens, dtype=np.int64)
             logger.info("Using pre-encoded token stream (%s tokens)", len(self.tokens))
         elif hasattr(tokenizer, "encode_corpus"):
@@ -77,7 +83,7 @@ class WindowedDataset:
                 continue
             pairs = []
             for start in batch_starts:
-                x = self.tokens[start : start + self.max_len]
-                y = self.tokens[start + 1 : start + self.max_len + 1]
+                x = np.asarray(self.tokens[start : start + self.max_len], dtype=np.int64)
+                y = np.asarray(self.tokens[start + 1 : start + self.max_len + 1], dtype=np.int64)
                 pairs.append((x, y))
             yield pairs

@@ -238,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"remix_if:      {policy.get('remix_if')}")
         print(f"probe_on_stop: {bool(policy.get('probe_on_stop', True)) and not args.no_probe}")
         print(f"probe_mode:    {policy.get('probe_mode', 'cabinet')}")
+        print(f"probe_every:   {int(policy.get('probe_every') or 0)}")
         print(f"probe_n:       {int(policy.get('probe_n', 50))}")
         print(f"unguarded:     {bool(args.unguarded)}")
         print("No Metal init. Exiting 0.")
@@ -370,6 +371,35 @@ def main(argv: list[str] | None = None) -> int:
                 logger.warning("promote_best failed: %s", exc)
 
         if result.action in (Decision.CONTINUE, Decision.PROMOTE):
+            probe_every = int(policy.get("probe_every") or 0)
+            if (
+                not skip_probe
+                and probe_every > 0
+                and session.step > 0
+                and session.step % probe_every == 0
+            ):
+                try:
+                    from training.unguided.decide import decide_next_step
+                    from training.unguided.prober import (
+                        next_step_context,
+                        run_session_probe,
+                        write_session_stop_reports,
+                    )
+
+                    report = run_session_probe(session, policy)
+                    verdict = decide_next_step(
+                        next_step_context(
+                            step=session.step,
+                            max_steps=max_steps,
+                            policy=policy,
+                            last_eval=last_eval,
+                            report=report,
+                        )
+                    )
+                    md = write_session_stop_reports(run_dir, report, verdict)
+                    logger.info("mid-train probe step=%s md=%s", session.step, md)
+                except Exception as exc:
+                    logger.warning("mid-train probe failed: %s", exc)
             continue
 
         if result.action == Decision.ABORT_REMIX:

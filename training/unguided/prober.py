@@ -105,8 +105,18 @@ PHASE2_INJECT_PROMPTS = (
     "User: What body system is the kidney in? Assistant:",
     "User: Is the number 1 prime? Assistant:",
 )
+TINYSTORIES_PROMPTS = (
+    "Once upon a time there was a little girl named Lily who found a",
+    "Tell me a short story about a brave mouse.",
+    "Who are you?",
+    "What city is the capital of France?",
+    "What is the capital of Atlantis?",
+    "What is 17 + 4?",
+)
 ENGLISH_GENERATE_TEMP = 0.8
 ENGLISH_MAX_NEW_TOKENS = 12
+TINYSTORIES_GENERATE_TEMP = 0.8
+TINYSTORIES_MAX_NEW_TOKENS = 160
 INJECT_GENERATE_TEMP = 0.7
 INJECT_MAX_NEW_TOKENS = 15
 _CABINET_DUMP_MARKERS = (
@@ -452,6 +462,68 @@ def run_english_stop_probe(
     }
 
 
+def run_tinystories_stop_probe(
+    *,
+    model: Any,
+    tokenizer: Any,
+    step: int | None = None,
+    checkpoint: str = "",
+    seed: int = 42,
+    prompts: Sequence[str] = TINYSTORIES_PROMPTS,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for i, prompt in enumerate(prompts):
+        generated = generate_english_continuation(
+            model,
+            tokenizer,
+            prompt,
+            seed=int(seed) + i,
+            max_new_tokens=TINYSTORIES_MAX_NEW_TOKENS,
+            temperature=TINYSTORIES_GENERATE_TEMP,
+        )
+        dump = looks_like_cabinet_dump(generated)
+        rows.append(
+            {
+                "kind": "tinystories",
+                "typed": prompt,
+                "prompt": prompt,
+                "generated": generated,
+                "copies_mix": dump,
+            }
+        )
+    n = len(rows)
+    n_dump = sum(1 for r in rows if r.get("copies_mix"))
+    return {
+        "probe_mode": "tinystories",
+        "checkpoint": checkpoint,
+        "facts": "data/tinystories",
+        "step": step,
+        "n_unique": 0,
+        "settings": {
+            "temperature": TINYSTORIES_GENERATE_TEMP,
+            "top_k": None,
+            "n": n,
+            "seed": seed,
+            "max_new_tokens": TINYSTORIES_MAX_NEW_TOKENS,
+        },
+        "n_cabinet": 0,
+        "n_match": 0,
+        "n_swap": 0,
+        "exact_rate": None,
+        "swap_rate": 0.0,
+        "class_counts": {},
+        "by_family": {},
+        "collapsing_families": [],
+        "long_unique_fail": 0,
+        "short_template_exact": None,
+        "ood_n": n,
+        "ood_mix_copies": n_dump,
+        "mix_smells": {"dirty_n": 0, "shared_n": 0, "dirty_gold": [], "shared_assistants": []},
+        "cabinet": [],
+        "ood": rows,
+    }
+
+
 def run_inject_probe(
     *,
     model: Any,
@@ -637,6 +709,14 @@ def run_session_probe(session: Any, policy: dict[str, Any]) -> dict[str, Any]:
             checkpoint=checkpoint,
             seed=seed,
         )
+    if mode == "tinystories":
+        return run_tinystories_stop_probe(
+            model=session.model,
+            tokenizer=session.tokenizer,
+            step=step,
+            checkpoint=checkpoint,
+            seed=seed,
+        )
     facts = Path(session.dataset_path or DEFAULT_FACTS)
     if not facts.is_file():
         facts = DEFAULT_FACTS
@@ -716,6 +796,10 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
         f"- step: {report.get('step')}",
         f"- mix: `{report.get('facts') or ''}` ({report.get('n_unique')} unique trained)",
         (
+            f"- settings: temp={TINYSTORIES_GENERATE_TEMP} max_new={TINYSTORIES_MAX_NEW_TOKENS} "
+            f"n={report.get('ood_n')} (TinyStories open English)"
+            if report.get("probe_mode") == "tinystories"
+            else (
             f"- settings: temp={ENGLISH_GENERATE_TEMP} max_new={ENGLISH_MAX_NEW_TOKENS} "
             f"n={report.get('ood_n')} (Phase 1 English generate)"
             if report.get("probe_mode") == "english"
@@ -727,6 +811,7 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
                     f"- settings: temp={CABINET_GENERATE_TEMP} top_k={CABINET_GENERATE_TOP_K} "
                     f"n={report.get('n_cabinet')} (App cabinet generate)"
                 )
+            )
             )
         ),
         "",
@@ -743,7 +828,8 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
         lines.append(f"- {reason}")
     english = report.get("probe_mode") == "english"
     inject = report.get("probe_mode") == "inject"
-    if english or inject:
+    tinystories = report.get("probe_mode") == "tinystories"
+    if english or inject or tinystories:
         lines += [
             "",
             "## Out-of-distribution prose",
@@ -886,6 +972,11 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
         "not v9 96% exact. Unguided will not resume this dir."
         if report.get("probe_mode") == "inject"
         else (
+            "Read the 160-token story continuations. Coherence is the metric. "
+            "Do not stop at 10k steps because val loss looks calm. "
+            "Unguided will not resume this dir."
+            if report.get("probe_mode") == "tinystories" or verdict.mode == "tinystories_english"
+            else (
             "Read OOD completions for English structure, not cabinet exact. "
             "Phase 2 later: `auto_train.py --resume` this checkpoint with a light mix. "
             "Unguided will not resume this dir."
@@ -895,6 +986,7 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
                 if not verdict.understands
                 else "Binding looks general enough to hold; still a cabinet reciter by product design."
             )
+            )
         )
     )
     lines += [
@@ -902,7 +994,7 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
         f"Primary: **{verdict.primary}**. " + closing,
         "",
         "Unguided cannot resume this dir. A mix or config change needs a new `--name` and a fresh BPE."
-        if verdict.mode not in {"english_foundation", "inject_integration"}
+        if verdict.mode not in {"english_foundation", "inject_integration", "tinystories_english"}
         else "",
         "",
     ]

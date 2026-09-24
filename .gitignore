@@ -5,6 +5,10 @@ __pycache__/
 *.npz
 data/*.txt
 
+# Relocated pre-0.1.0 English artifacts (gitignored mixes / checkpoints).
+legacy/data/
+legacy/output/
+
 # Legacy artifact dirs (pre-output/ migration)
 logs/
 models/

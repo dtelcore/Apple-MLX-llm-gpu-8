@@ -48,8 +48,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--probe-mode",
         type=str,
         default="cabinet",
-        choices=("cabinet", "english", "inject"),
-        help="cabinet (default stored User:), english (Phase 1 OOD), inject (held-out frames + OOD; v10 stop also writes generate_probe.md)",
+        choices=("cabinet", "english", "inject", "tinystories"),
+        help="cabinet (stored User:), english (legacy Phase 1 OOD), inject (legacy v10), tinystories (160-token open English)",
     )
     return parser.parse_args(argv)
 
@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     from training.unguided.prober import (
         PHASE1_OOD_PROMPTS,
         PHASE2_INJECT_PROMPTS,
+        TINYSTORIES_PROMPTS,
         resolve_checkpoint,
         resolve_facts,
         resolve_run_dir,
@@ -94,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     probe_mode = str(args.probe_mode or "cabinet").strip().lower()
     inject = probe_mode == "inject"
     english = probe_mode == "english"
+    tinystories = probe_mode == "tinystories"
 
     try:
         checkpoint = resolve_checkpoint(args.name, args.checkpoint) if (args.name or args.checkpoint) else None
@@ -105,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     facts = None
-    if not inject and not english:
+    if not inject and not english and not tinystories:
         facts = resolve_facts(args.facts, args.config)
         if not facts.is_file():
             logger.error("Facts not found: %s", facts)
@@ -131,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
             print("ood prompts:")
             for prompt in PHASE1_OOD_PROMPTS:
                 print(f"  - {prompt}")
+        elif tinystories:
+            print("tinystories prompts:")
+            for prompt in TINYSTORIES_PROMPTS:
+                print(f"  - {prompt}")
         else:
             index = load_cabinet(facts)
             picked = select_prompts(index, int(args.n), seed=int(args.seed))
@@ -151,12 +157,17 @@ def main(argv: list[str] | None = None) -> int:
 
     from model.gpt import GPTModel
     from training.checkpoint import load_checkpoint
-    from training.unguided.prober import run_english_stop_probe, run_generate_probe, run_inject_probe
+    from training.unguided.prober import (
+        run_english_stop_probe,
+        run_generate_probe,
+        run_inject_probe,
+        run_tinystories_stop_probe,
+    )
 
     logger.info("loading checkpoint %s", checkpoint)
     gpt_config, params, tokenizer, _, _ = load_checkpoint(str(checkpoint))
     model = GPTModel(gpt_config, params)
-    policy = {"probe_mode": "english"} if (inject or english) else {}
+    policy = {"probe_mode": probe_mode} if (inject or english or tinystories) else {}
     if inject:
         report = run_inject_probe(
             model=model,
@@ -167,6 +178,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif english:
         report = run_english_stop_probe(
+            model=model,
+            tokenizer=tokenizer,
+            step=int(step) if step is not None else None,
+            checkpoint=str(checkpoint),
+            seed=int(args.seed),
+        )
+    elif tinystories:
+        report = run_tinystories_stop_probe(
             model=model,
             tokenizer=tokenizer,
             step=int(step) if step is not None else None,
@@ -200,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"inject frames {len(report.get('inject') or [])}  ood dumps {report['ood_mix_copies']}/{report['ood_n']}")
     else:
         md = write_probe_reports(run_dir, report, verdict)
-        if not english:
+        if not english and not tinystories:
             print(f"exact {report['n_match']}/{report['n_cabinet']} = {report['exact_rate']:.1%}")
             print(f"swap  {report['n_swap']}/{report['n_cabinet']} = {report['swap_rate']:.1%}")
     print(f"mode  {verdict.mode}  understands={verdict.understands}  next={verdict.primary}")
