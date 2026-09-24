@@ -83,6 +83,42 @@ class MixBuilderTests(unittest.TestCase):
         self.assertEqual(sum(1 for line in mixed if line.startswith("prose ")), 12)
         self.assertGreater(sum(1 for line in mixed if line.startswith("User:")), 0)
 
+    def test_dense_target_and_fraction(self):
+        from tools.build_english_phase2_mix import select_target_pairs
+
+        pairs = {
+            "What is the capital of France?": "The capital of France is Paris.",
+            "Where is Paris?": "Paris is a city in France.",
+            "Which organ system does the kidney belong to?": "The kidney belongs to the urinary system.",
+            "Is 17 a prime number?": "Yes, 17 is a prime number.",
+            "Who invented Z4?": "Konrad Zuse is credited with inventing Z4.",
+            "What pathogen causes COVID-19?": "SARS-CoV-2 is the pathogen that causes COVID-19.",
+        }
+        picked = select_target_pairs(pairs, max_facts=60, max_per_family=15)
+        self.assertIn("What is the capital of France?", picked)
+        self.assertIn("Which organ system does the kidney belong to?", picked)
+        self.assertNotIn("Who invented Z4?", picked)
+        self.assertNotIn("What pathogen causes COVID-19?", picked)
+        frames = generate_frames(
+            "What is the capital of France?",
+            "The capital of France is Paris.",
+            dense=True,
+        )
+        self.assertGreaterEqual(len(frames), 6)
+        self.assertEqual(max_identical_count(frames), 1)
+        prose = [f"wiki sentence {i} about rivers and trade." for i in range(400)]
+        mixed, fact_frames = build_mix(
+            pairs=picked,
+            prose_lines=prose,
+            seed=2,
+            dense=True,
+            fact_fraction=0.15,
+        )
+        frac = len(fact_frames) / len(mixed)
+        self.assertGreater(frac, 0.10)
+        self.assertLess(frac, 0.22)
+        self.assertLess(len(mixed), 400)
+
     def test_refuse_duplicate_fact_frames(self):
         with mock.patch(
             "tools.build_english_phase2_mix.all_fact_frames",
@@ -197,7 +233,7 @@ class InjectProbeTests(unittest.TestCase):
         )
         md = render_markdown(report, verdict)
         self.assertIn("Held-out inject frames", md)
-        self.assertIn("Regarding the administrative capital city of France, it is", md)
+        self.assertIn("User: What city is the capital of France? Assistant:", md)
         self.assertIn("Once upon a time in a valley", md)
         self.assertIn("not v9 96% exact", md)
         self.assertNotIn("| generate exact |", md)
@@ -221,7 +257,7 @@ class InjectProbeTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         out = buf.getvalue()
         self.assertIn("probe_mode:    inject", out)
-        self.assertIn("Regarding the administrative capital city of France, it is", out)
+        self.assertIn("User: What city is the capital of France? Assistant:", out)
         self.assertIn("No Metal init", out)
 
 
@@ -234,6 +270,12 @@ class Phase2RecipeTests(unittest.TestCase):
         self.assertFalse(phase2["dataset"]["combine"])
         self.assertEqual(phase2["dataset"]["path"], "data/english_phase2_mix.txt")
         self.assertEqual(phase2["hyperparameters"]["learning_rate"], 5e-5)
+        phase2b = json.loads((_ROOT / "setup" / "english_phase2b_config.json").read_text(encoding="utf-8"))
+        for key in ("embedding_dim", "num_layers", "num_heads", "max_len"):
+            self.assertEqual(phase1["model"][key], phase2b["model"][key])
+        self.assertEqual(phase2b["dataset"]["path"], "data/english_phase2b_mix.txt")
+        self.assertFalse(phase2b["dataset"]["combine"])
+        self.assertEqual(phase2b["hyperparameters"]["learning_rate"], 6e-5)
 
 
 if __name__ == "__main__":

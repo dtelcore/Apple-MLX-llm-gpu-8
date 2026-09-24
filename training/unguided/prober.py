@@ -101,9 +101,9 @@ PHASE1_OOD_PROMPTS = (
     "Deep beneath the ocean surface, scientists discovered",
 )
 PHASE2_INJECT_PROMPTS = (
-    "Regarding the administrative capital city of France, it is",
-    "When evaluating the core functionality of human kidneys, they",
-    "The primary structural breakdown of prime numbers implies that",
+    "User: What city is the capital of France? Assistant:",
+    "User: What body system is the kidney in? Assistant:",
+    "User: Is the number 1 prime? Assistant:",
 )
 ENGLISH_GENERATE_TEMP = 0.8
 ENGLISH_MAX_NEW_TOKENS = 12
@@ -117,6 +117,7 @@ _CABINET_DUMP_MARKERS = (
     "assistant:",
     "rotavirus",
 )
+_FRANCE_NEIGHBOUR_FAIL = ("belgium", "brussels")
 
 _FAMILY_RULES = (
     (r"^what is the capital of ", "capital_of"),
@@ -360,6 +361,15 @@ def looks_like_cabinet_dump(text: str) -> bool:
     return any(m in low for m in _CABINET_DUMP_MARKERS)
 
 
+def france_neighbour_bleed(prompt: str, generated: str) -> bool:
+    """Belgium/Brussels on a France prompt is a v10 fail (2b neighbour leak)."""
+    p = (prompt or "").casefold()
+    g = (generated or "").casefold()
+    if "france" not in p:
+        return False
+    return any(token in g for token in _FRANCE_NEIGHBOUR_FAIL)
+
+
 def generate_english_continuation(
     model: Any,
     tokenizer: Any,
@@ -451,6 +461,7 @@ def run_inject_probe(
     seed: int = 42,
     ood_prompts: Sequence[str] = PHASE1_OOD_PROMPTS,
     inject_prompts: Sequence[str] = PHASE2_INJECT_PROMPTS,
+    mix_path: str = "",
 ) -> dict[str, Any]:
     """English forgetting check plus held-out fact frames (not mix-exact recitation)."""
     ood_rows: list[dict[str, Any]] = []
@@ -477,6 +488,7 @@ def run_inject_probe(
             max_new_tokens=INJECT_MAX_NEW_TOKENS,
             temperature=INJECT_GENERATE_TEMP,
         )
+        bleed = france_neighbour_bleed(prompt, generated)
         inject_rows.append(
             {
                 "kind": "inject_frame",
@@ -484,14 +496,17 @@ def run_inject_probe(
                 "prompt": prompt,
                 "generated": generated,
                 "copies_mix": looks_like_cabinet_dump(generated),
+                "neighbour_bleed": bleed,
             }
         )
     n_ood = len(ood_rows)
     n_dump = sum(1 for r in ood_rows if r.get("copies_mix"))
+    n_bleed = sum(1 for r in inject_rows if r.get("neighbour_bleed"))
     return {
         "probe_mode": "inject",
         "checkpoint": checkpoint,
-        "facts": "data/english_phase2_mix.txt",
+        "facts": mix_path or "data/chat_facts_v10.jsonl",
+        "n_neighbour_bleed": n_bleed,
         "step": step,
         "n_unique": 0,
         "settings": {
@@ -610,26 +625,52 @@ def run_generate_probe(
 
 
 def run_session_probe(session: Any, policy: dict[str, Any]) -> dict[str, Any]:
-    if str(policy.get("probe_mode") or "cabinet").strip().lower() == "english":
+    mode = str(policy.get("probe_mode") or "cabinet").strip().lower()
+    step = int(getattr(session, "step", 0) or 0)
+    checkpoint = str(getattr(session, "checkpoint_dir", "") or "")
+    seed = int(policy.get("probe_seed", 42))
+    if mode == "english":
         return run_english_stop_probe(
             model=session.model,
             tokenizer=session.tokenizer,
-            step=int(getattr(session, "step", 0) or 0),
-            checkpoint=str(getattr(session, "checkpoint_dir", "") or ""),
-            seed=int(policy.get("probe_seed", 42)),
+            step=step,
+            checkpoint=checkpoint,
+            seed=seed,
         )
     facts = Path(session.dataset_path or DEFAULT_FACTS)
     if not facts.is_file():
         facts = DEFAULT_FACTS
+    if mode == "inject":
+        report = run_inject_probe(
+            model=session.model,
+            tokenizer=session.tokenizer,
+            step=step,
+            checkpoint=checkpoint,
+            seed=seed,
+            mix_path=str(facts) if facts.is_file() else "",
+        )
+        if facts.is_file():
+            cabinet_report = run_generate_probe(
+                model=session.model,
+                tokenizer=session.tokenizer,
+                facts_path=facts,
+                n=int(policy.get("probe_n", DEFAULT_PROBE_N)),
+                seed=seed,
+                include_ood=bool(policy.get("probe_ood", True)),
+                step=step,
+                checkpoint=checkpoint,
+            )
+            report["cabinet_report"] = cabinet_report
+        return report
     return run_generate_probe(
         model=session.model,
         tokenizer=session.tokenizer,
         facts_path=facts,
         n=int(policy.get("probe_n", DEFAULT_PROBE_N)),
-        seed=int(policy.get("probe_seed", 42)),
+        seed=seed,
         include_ood=bool(policy.get("probe_ood", True)),
-        step=int(getattr(session, "step", 0) or 0),
-        checkpoint=str(getattr(session, "checkpoint_dir", "") or ""),
+        step=step,
+        checkpoint=checkpoint,
     )
 
 
@@ -730,9 +771,23 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
                 lines.append("_None._")
             else:
                 for row in inject_rows:
+                    flag = ""
+                    if row.get("neighbour_bleed"):
+                        flag = " **FAIL: neighbour country on a France prompt.**"
                     lines.append(f"**Inject Frame:** `{row.get('typed')}`")
-                    lines.append(f"**Result:** `{row.get('generated')}`")
+                    lines.append(f"**Result:** `{row.get('generated')}`{flag}")
                     lines.append("")
+            n_bleed = int(report.get("n_neighbour_bleed") or 0)
+            if n_bleed:
+                lines += [
+                    f"**Neighbour bleed:** {n_bleed} France-frame completion(s) mentioned Belgium/Brussels. That is a fail.",
+                    "",
+                ]
+            if report.get("cabinet_report"):
+                lines += [
+                    "Stored `User:` generate is in `generate_probe.md` (same stop). Success is paraphrased on-target English, not v9 96% exact.",
+                    "",
+                ]
     else:
         exact = report.get("exact_rate") or 0.0
         swap = report.get("swap_rate") or 0.0
@@ -847,7 +902,7 @@ def render_markdown(report: dict[str, Any], verdict: NextStepResult) -> str:
         f"Primary: **{verdict.primary}**. " + closing,
         "",
         "Unguided cannot resume this dir. A mix or config change needs a new `--name` and a fresh BPE."
-        if verdict.mode != "english_foundation"
+        if verdict.mode not in {"english_foundation", "inject_integration"}
         else "",
         "",
     ]
@@ -874,7 +929,7 @@ def write_probe_reports(out_dir: Path, report: dict[str, Any], verdict: NextStep
 def write_inject_probe_reports(out_dir: Path, report: dict[str, Any], verdict: NextStepResult) -> Path:
     """Write inject_probe.md without replacing Phase 1 generate_probe.md."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    payload = dict(report)
+    payload = {k: v for k, v in report.items() if k != "cabinet_report"}
     payload["verdict"] = verdict.to_dict()
     (out_dir / "inject_probe.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
@@ -883,6 +938,21 @@ def write_inject_probe_reports(out_dir: Path, report: dict[str, Any], verdict: N
     md_path = out_dir / "inject_probe.md"
     md_path.write_text(render_markdown(report, verdict), encoding="utf-8")
     return md_path
+
+
+def write_session_stop_reports(
+    out_dir: Path,
+    report: dict[str, Any],
+    verdict: NextStepResult,
+) -> Path:
+    """Trainer stop: inject_probe.md and, when present, stored User generate_probe.md."""
+    if report.get("probe_mode") == "inject":
+        md = write_inject_probe_reports(out_dir, report, verdict)
+        cabinet_report = report.get("cabinet_report")
+        if isinstance(cabinet_report, dict) and cabinet_report.get("cabinet"):
+            write_probe_reports(out_dir, cabinet_report, verdict)
+        return md
+    return write_probe_reports(out_dir, report, verdict)
 
 
 def resolve_checkpoint(name: Optional[str], checkpoint: Optional[str]) -> Path:

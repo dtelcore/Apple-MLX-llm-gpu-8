@@ -35,22 +35,32 @@ COMBINED_DATASET_NAME = "data_dir"
 
 
 def _native_line_from_jsonl(line: str) -> Optional[str]:
-    """Turn one query/response JSONL record into a User:/Assistant: train line."""
+    """Turn one JSONL record into a training line.
+
+    Canonical cabinet gold is ``query``/``response`` (or ``user``/``assistant``)
+    and becomes ``User: … Assistant: …``. Mix files may also store wiki or
+    extra fact frames as ``text`` / ``prose`` / ``frame`` so BPE sees both.
+    """
     try:
         rec = json.loads(line)
     except json.JSONDecodeError:
         return None
+    if not isinstance(rec, dict):
+        return None
+    for key in ("text", "prose", "frame"):
+        raw = rec.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return " ".join(raw.split())
     user = ""
     assistant = ""
-    if isinstance(rec, dict):
-        query = rec.get("query") or {}
-        response = rec.get("response") or {}
-        if isinstance(query, dict):
-            user = str(query.get("user") or "")
-        if isinstance(response, dict):
-            assistant = str(response.get("assistant") or "")
-        user = user or str(rec.get("user") or "")
-        assistant = assistant or str(rec.get("assistant") or "")
+    query = rec.get("query") or {}
+    response = rec.get("response") or {}
+    if isinstance(query, dict):
+        user = str(query.get("user") or "")
+    if isinstance(response, dict):
+        assistant = str(response.get("assistant") or "")
+    user = user or str(rec.get("user") or "")
+    assistant = assistant or str(rec.get("assistant") or "")
     if not user.strip() or not assistant.strip():
         return None
     from training.chat_format import ASSISTANT_PREFIX, USER_PREFIX

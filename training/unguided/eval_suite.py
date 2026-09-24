@@ -39,16 +39,19 @@ class EvalResults:
     harvested_exact: float | None = None
 
 
+VAL_ONLY_PROBE_MODES = frozenset({"english", "inject"})
+
+
 def probe_mode(policy: dict | None) -> str:
     raw = str((policy or {}).get("probe_mode") or "cabinet").strip().lower()
-    return raw if raw in {"cabinet", "english"} else "cabinet"
+    return raw if raw in {"cabinet", "english", "inject"} else "cabinet"
 
 
 def run_eval_suite(session: Any, policy: dict) -> EvalResults:
     """Three lightweight evals. Never launches a second Metal process.
 
-    ``probe_mode=english`` is val CE / ppl only — no cabinet index, no
-    France/Paris teacher-forced anchors, no router fixture.
+    ``probe_mode=english`` / ``inject`` is val CE / ppl only — no cabinet
+    index, no France/Paris teacher-forced anchors, no router fixture.
     """
     from training.eval import evaluate_val_loss, perplexity_from_loss
 
@@ -70,7 +73,7 @@ def run_eval_suite(session: Any, policy: dict) -> EvalResults:
         logger.warning("evaluate_val_loss failed: %s", exc)
         val_loss = None
 
-    if probe_mode(policy) == "english":
+    if probe_mode(policy) in VAL_ONLY_PROBE_MODES:
         return EvalResults(
             val_loss=val_loss,
             val_ppl=val_ppl,

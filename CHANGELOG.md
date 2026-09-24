@@ -49,6 +49,23 @@ restart to load a promoted net.
   data/english_phase2_mix.txt --reset-lr-schedule`. Unguided will not
   resume that dir. `--dataset-path` is refused without `--resume` and
   never rebuilds BPE. Probe: `unguided_prober.py --probe-mode inject`.
+- Phase 2b dense inject: `tools/build_english_phase2_mix.py --dense` writes
+  `data/english_phase2b_mix.txt` (geo/organ/prime only, ~15% unique frames,
+  subsampled `train.txt`). Same BPE resume into English-Phase1. Leaves the
+  0.15% mix on disk. Prefer `--learning-rate 6e-5` (loss moved more than at 5e-5). Product stays `chat_facts_v7`.
+- v10 integration mix (fresh BPE, not a Phase 1 resume): `tools/build_chat_facts_v10.py`
+  writes `data/chat_facts_v10.jsonl` from v9 uniques (split geo Assistants kept),
+  pinned L’Hopital/Cramer named-after golds, prime-1 gold that keeps “not”.
+  Native `User:`/`Assistant:` only (the v10_4 shared wrappers are gone), with a
+  trailing ` User:` stop marker on chat lines so generate can halt. Probe
+  core 40× / remaining keys 10×, not 300×. Wiki slice in the same file so
+  native chat is ~40–50% of lines. Policy `setup/unguided_v10_policy.json`:
+  `probe_mode=inject`, `max_steps` 10000, `early_stop_patience` 200. Inject
+  prompts are held-out `User:` paraphrases, not wrapper stems. Do not
+  `--resume` v7/v8/v9, English-Phase1, or `chat_facts_v10_4`/`_5`/`_6`. Product
+  stays `chat_facts_v7`. Pass/fail: stored Paris/kidney/prime-1 without wiki
+  tail; inject paraphrases on-target; valley/photosynthesis still English;
+  Belgium on a France prompt is a fail. Not v9 96% exact.
 
 ## 0.0.8
 

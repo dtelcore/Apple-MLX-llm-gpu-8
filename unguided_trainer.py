@@ -78,7 +78,7 @@ def _finalize_stop(
     if not skip_probe:
         try:
             from training.unguided.decide import decide_next_step
-            from training.unguided.prober import next_step_context, run_session_probe, write_probe_reports
+            from training.unguided.prober import next_step_context, run_session_probe, write_session_stop_reports
 
             logger.info("stop probe | step=%s n=%s", session.step, policy.get("probe_n", 50))
             report = run_session_probe(session, policy)
@@ -93,17 +93,18 @@ def _finalize_stop(
                     report=report,
                 )
             )
-            md = write_probe_reports(run_dir, report, verdict)
-            payload["generate_exact_rate"] = report.get("exact_rate")
-            payload["generate_swap_rate"] = report.get("swap_rate")
+            md = write_session_stop_reports(run_dir, report, verdict)
+            cabinet_report = report.get("cabinet_report") if isinstance(report.get("cabinet_report"), dict) else report
+            payload["generate_exact_rate"] = (cabinet_report or {}).get("exact_rate")
+            payload["generate_swap_rate"] = (cabinet_report or {}).get("swap_rate")
             payload["next_step"] = verdict.primary
             payload["understands"] = verdict.understands
             payload["recitation_mode"] = verdict.mode
             logger.info(
                 "stop probe mode=%s exact=%s swap=%s next=%s md=%s",
                 policy.get("probe_mode", "cabinet"),
-                report.get("exact_rate"),
-                report.get("swap_rate"),
+                (cabinet_report or {}).get("exact_rate"),
+                (cabinet_report or {}).get("swap_rate"),
                 verdict.primary,
                 md,
             )

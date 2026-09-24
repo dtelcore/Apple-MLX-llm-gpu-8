@@ -49,7 +49,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default="cabinet",
         choices=("cabinet", "english", "inject"),
-        help="cabinet (default), english (Phase 1 OOD), inject (Phase 2 held-out frames + OOD)",
+        help="cabinet (default stored User:), english (Phase 1 OOD), inject (held-out frames + OOD; v10 stop also writes generate_probe.md)",
     )
     return parser.parse_args(argv)
 
