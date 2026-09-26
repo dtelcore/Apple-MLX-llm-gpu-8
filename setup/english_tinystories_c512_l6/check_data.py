@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Confirm the c512 run uses the existing TinyStories shards. Does not rebuild them."""
+"""Confirm the original TinyStories shards and the story-packed corpus. Does not rebuild them."""
 
 from __future__ import annotations
 
@@ -44,11 +44,42 @@ def main() -> int:
         for item in problems:
             print(f"  - {item}", file=sys.stderr)
         return 1
+    packed = ROOT / "data" / "tinystories_packed"
+    packed_manifest = packed / "manifest.json"
+    if not packed_manifest.is_file():
+        problems.append(f"missing packed corpus {packed_manifest}")
+    else:
+        try:
+            if str(ROOT) not in sys.path:
+                sys.path.insert(0, str(ROOT))
+            from training.tinystories_tokens import verify_story_pack
+            packed_meta = verify_story_pack(packed)
+        except Exception as exc:
+            problems.append(f"packed corpus: {exc}")
+            packed_meta = {}
+        else:
+            old_vocab = json.loads((root / "vocab.json").read_text(encoding="utf-8"))
+            new_vocab = json.loads((packed / "vocab.json").read_text(encoding="utf-8"))
+            if new_vocab.get("vocab", [])[:-1] != old_vocab.get("vocab", []):
+                problems.append("packed vocab is not the c256 merges plus one end token")
+            if new_vocab.get("vocab", [""])[-1] != "<|endofstory|>":
+                problems.append("packed vocab does not end with <|endofstory|>")
+            if int(packed_meta.get("vocab_size", 0)) != EXPECTED_VOCAB + 1:
+                problems.append(
+                    f"packed vocab_size {packed_meta.get('vocab_size')} != {EXPECTED_VOCAB + 1}"
+                )
+    if problems:
+        print("data check failed:", file=sys.stderr)
+        for item in problems:
+            print(f"  - {item}", file=sys.stderr)
+        return 1
     print("selected: full TinyStories train + valid")
     print(f"vocab: {EXPECTED_VOCAB} tokens, sha {EXPECTED_SHA[:12]}")
     print(f"train_tokens: {EXPECTED_TRAIN}")
     print(f"valid_tokens: {EXPECTED_VALID}")
-    print("no new BPE, no length filter, no second corpus")
+    print("packed: data/tinystories_packed")
+    print(f"packed vocab: {EXPECTED_VOCAB + 1} (c256 merges plus <|endofstory|>)")
+    print("windows stay inside one story")
     return 0
 
 

@@ -1053,6 +1053,7 @@ class GPTModel:
         use_kv_cache: bool = True,
         use_cuda_graph: bool = False,
         stop_strings: Optional[Sequence[str]] = None,
+        stop_ids: Optional[Sequence[int]] = None,
     ) -> List[int]:
         """Autoregressive sampling with temperature and optional top-k / top-p filters.
 
@@ -1066,17 +1067,20 @@ class GPTModel:
 
         ``stop_strings`` truncates generation when a decoded suffix contains one
         of the strings (requires ``tokenizer``). The matching stop text is dropped.
+
+        ``stop_ids`` stops before appending that token (the end-of-story id).
         """
         rng = rng or np.random.default_rng()
         ids = list(prompt_ids)
         prompt_len = len(ids)
+        stop_id_set = {int(i) for i in stop_ids} if stop_ids else set()
         self._cuda_graph_status = None
         if self._streaming:
             use_cuda_graph = False
         if not use_kv_cache:
             return self._generate_no_kv(
                 ids, max_new_tokens, temperature, top_k, top_p, tracer, tokenizer, rng,
-                stop_strings=stop_strings, prompt_len=prompt_len,
+                stop_strings=stop_strings, prompt_len=prompt_len, stop_ids=stop_id_set,
             )
 
         logits, kv_state = self._prefill_kv(ids[-self.config.max_len :], tracer=tracer)
@@ -1117,6 +1121,8 @@ class GPTModel:
                 next_id = _sample_next_id(
                     last_logits, temperature=temperature, top_k=top_k, top_p=top_p, rng=rng,
                 )
+            if int(next_id) in stop_id_set:
+                break
             ids.append(next_id)
             ids, stopped = trim_generated_stop_strings(
                 ids, prompt_len, tokenizer, stop_strings,
@@ -1136,10 +1142,11 @@ class GPTModel:
 
     def _generate_no_kv(
         self, ids, max_new_tokens, temperature, top_k, top_p, tracer, tokenizer, rng,
-        stop_strings=None, prompt_len=None,
+        stop_strings=None, prompt_len=None, stop_ids=None,
     ) -> List[int]:
         """Legacy full-recompute generate (KV cache disabled)."""
         prompt_len = len(ids) if prompt_len is None else int(prompt_len)
+        stop_id_set = set(stop_ids) if stop_ids else set()
         for step in range(max_new_tokens):
             if tracer is not None:
                 tracer.update_step(step)
@@ -1152,6 +1159,8 @@ class GPTModel:
             next_id = _sample_next_id(
                 last_logits, temperature=temperature, top_k=top_k, top_p=top_p, rng=rng,
             )
+            if int(next_id) in stop_id_set:
+                break
             ids.append(next_id)
             ids, stopped = trim_generated_stop_strings(
                 ids, prompt_len, tokenizer, stop_strings,

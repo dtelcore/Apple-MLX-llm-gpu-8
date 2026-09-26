@@ -73,11 +73,18 @@
     .card.loss { grid-column: 1; grid-row: 1 / 3; }
     .card.tok { grid-column: 2; grid-row: 1; }
     .card.ppl { grid-column: 2; grid-row: 2; }
-    .card.land { grid-column: 3; grid-row: 1; }
-    .card.dec { grid-column: 3; grid-row: 2; }
+    .card.land { grid-column: 3; grid-row: 1 / 3; }
+    .card.dec { display: none; }
     .card h2 { margin: 0 0 4px; font-size: 11px; color: var(--muted); font-weight: 650; display: flex; justify-content: space-between; gap: 8px; }
     .card h2 span { color: var(--text); font-variant-numeric: tabular-nums; }
-    .legend { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .legend { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+    .lock { margin-left: auto; display: inline-flex; gap: 4px; }
+    .win {
+      font: inherit; font-size: 11px; font-weight: 650; cursor: pointer;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 6px; padding: 1px 8px;
+    }
+    .win.on { color: var(--text); border-color: var(--accent); background: #24183f; }
     .legend b { color: var(--text); font-weight: 650; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 99px; margin-right: 4px; }
     .plot { position: relative; flex: 1; min-height: 0; }
@@ -114,7 +121,7 @@
       <span class="badge" id="live">idle</span>
       <label class="follow" for="log">Run</label>
       <select id="log"></select>
-      <label class="follow"><input type="checkbox" id="follow" checked /> Follow live unguided</label>
+      <label class="follow"><input type="checkbox" id="follow" checked /> Follow live</label>
       <div class="clocks">
         <div class="clock"><div class="k">Elapsed</div><div class="v" id="h-elapsed">—</div></div>
         <div class="clock"><div class="k">ETA</div><div class="v" id="h-eta">—</div></div>
@@ -161,7 +168,7 @@
     </div>
     <section class="body">
       <div class="card loss">
-        <h2>Loss vs step <span id="leg-loss"></span></h2>
+        <h2>All steps <span id="leg-loss"></span></h2>
         <div class="legend"><span class="dot" style="background:#4C9BE8"></span>train <span class="dot" style="background:#F28B5A;margin-left:10px"></span>val <span id="leg-loss-more"></span></div>
         <div class="plot"><canvas id="loss"></canvas><div class="tip" id="tip-loss"></div></div>
       </div>
@@ -176,8 +183,14 @@
         <div class="plot"><canvas id="ppl"></canvas><div class="tip" id="tip-ppl"></div></div>
       </div>
       <div class="card land">
-        <h2>Landscape <span>step × vol, color = loss</span></h2>
-        <div class="legend">High vol = bumpy recent loss. Cooler = lower loss.</div>
+        <h2>Last steps <span id="leg-recent"></span></h2>
+        <div class="legend">
+          <span id="leg-recent-more">each logged step</span>
+          <span class="lock">
+            <button type="button" class="win" data-n="10">10</button>
+            <button type="button" class="win on" data-n="20">20</button>
+          </span>
+        </div>
         <div class="plot"><canvas id="land"></canvas><div class="tip" id="tip-land"></div></div>
       </div>
       <div class="card dec">
@@ -198,6 +211,7 @@
     const logEl = document.getElementById("log");
     const followEl = document.getElementById("follow");
     const charts = {};
+    let recentLock = 20;
 
     function num(v, d) {
       if (v == null || Number.isNaN(Number(v))) return "—";
@@ -247,39 +261,95 @@
       return { ctx, w, h };
     }
 
-    function drawLine(canvas, xs, ys, color, extra) {
+    function axisNum(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "";
+      const a = Math.abs(n);
+      if (a >= 1e6) return (n / 1e6).toFixed(1) + "M";
+      if (a >= 1e4) return (n / 1e3).toFixed(0) + "k";
+      if (a >= 1e3) return (n / 1e3).toFixed(1) + "k";
+      return num(n);
+    }
+
+    function collectPts(xs, ys) {
+      const pts = [];
+      for (let i = 0; i < xs.length; i++) {
+        if (ys[i] == null || Number.isNaN(Number(ys[i]))) continue;
+        pts.push({ x: Number(xs[i]), y: Number(ys[i]) });
+      }
+      return pts;
+    }
+
+    function smoothPts(pts) {
+      const n = pts.length;
+      if (n < 4) return pts.slice();
+      const w = Math.max(3, Math.round(n / 12));
+      const half = Math.floor(w / 2);
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        let sum = 0, c = 0;
+        for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
+          sum += pts[j].y; c++;
+        }
+        out.push({ x: pts[i].x, y: sum / c });
+      }
+      return out;
+    }
+
+    function yWindow(pts, mode) {
+      const src = (mode === "recent" && pts.length >= 40)
+        ? pts.slice(Math.floor(pts.length * 0.45))
+        : pts;
+      let minY = src[0].y, maxY = src[0].y;
+      src.forEach((p) => { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
+      const span = (maxY - minY) || Math.abs(maxY) * 0.04 || 1e-4;
+      return { minY: minY - span * 0.14, maxY: maxY + span * 0.14 };
+    }
+
+    function strokeGaps(ctx, pts, X, Y, gap) {
+      let open = false;
+      pts.forEach((p, i) => {
+        const px = X(p.x), py = Y(p.y);
+        const broke = i > 0 && (p.x - pts[i - 1].x) > gap;
+        if (!open || broke) { if (open) ctx.stroke(); ctx.beginPath(); ctx.moveTo(px, py); open = true; }
+        else ctx.lineTo(px, py);
+      });
+      if (open) ctx.stroke();
+    }
+
+    function drawLine(canvas, xs, ys, color, opt) {
+      opt = opt || {};
       const { ctx, w, h } = fit(canvas);
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "#111217";
       ctx.fillRect(0, 0, w, h);
-      const pts = [];
-      for (let i = 0; i < xs.length; i++) {
-        if (ys[i] == null || Number.isNaN(ys[i])) continue;
-        pts.push({ x: xs[i], y: ys[i], i });
-      }
+      const pts = collectPts(xs, ys);
+      const trend = opt.steppy ? pts : smoothPts(pts);
       const extras = [];
-      if (extra && extra.xs) {
-        for (let i = 0; i < extra.xs.length; i++) {
-          const y = extra.ys[i];
-          if (y == null) continue;
-          extras.push({ x: extra.xs[i], y });
+      if (opt.xs) {
+        for (let i = 0; i < opt.xs.length; i++) {
+          const y = opt.ys[i];
+          if (y == null || Number.isNaN(Number(y))) continue;
+          extras.push({ x: Number(opt.xs[i]), y: Number(y) });
         }
       }
-      const pad = { l: 46, r: 10, t: 10, b: 22 };
-      charts[canvas.id] = { pts, extras, color, pad, w, h };
+      const pad = { l: 48, r: 12, t: 12, b: 22 };
+      charts[canvas.id] = { pts, color, pad, w, h };
       if (pts.length < 2 && extras.length < 1) return;
       let minX = pts.length ? pts[0].x : extras[0].x;
-      let maxX = minX, minY = pts.length ? pts[0].y : extras[0].y, maxY = minY;
-      for (const p of pts.concat(extras)) {
-        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-      }
+      let maxX = minX;
+      pts.concat(extras).forEach((p) => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); });
       if (maxX === minX) maxX = minX + 1;
-      const span = maxY - minY || Math.abs(maxY) * 0.05 || 1e-6;
-      minY -= span * 0.08; maxY += span * 0.08;
+      const win = yWindow(trend.length ? trend : pts, opt.scale || "full");
+      const minY = win.minY, maxY = win.maxY;
       const X = (x) => pad.l + ((x - minX) / (maxX - minX)) * (w - pad.l - pad.r);
       const Y = (y) => h - pad.b - ((y - minY) / (maxY - minY)) * (h - pad.t - pad.b);
       charts[canvas.id].map = { X, Y, minX, maxX, minY, maxY };
+      const deltas = [];
+      for (let i = 1; i < pts.length; i++) deltas.push(pts[i].x - pts[i - 1].x);
+      deltas.sort((a, b) => a - b);
+      const med = deltas.length ? deltas[Math.floor(deltas.length / 2)] : 1;
+      const gap = Math.max(med * 8, 1);
       ctx.strokeStyle = "#2a2a33";
       ctx.lineWidth = 1;
       ctx.font = "11px ui-sans-serif";
@@ -288,79 +358,39 @@
         const yv = minY + (maxY - minY) * (t / 3);
         const py = Y(yv);
         ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(w - pad.r, py); ctx.stroke();
-        ctx.fillText(num(yv), 4, py + 4);
+        ctx.fillText(axisNum(yv), 4, py + 4);
       }
-      ctx.fillText(String(minX), pad.l, h - 6);
-      ctx.fillText(String(maxX), w - 36, h - 6);
+      ctx.fillText(axisNum(minX), pad.l, h - 6);
+      ctx.fillText(axisNum(maxX), w - 42, h - 6);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(pad.l, pad.t, w - pad.l - pad.r, h - pad.t - pad.b);
+      ctx.clip();
       if (pts.length >= 2) {
-        const g = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
-        g.addColorStop(0, color + "55");
-        g.addColorStop(1, color + "00");
-        ctx.beginPath();
-        pts.forEach((p, i) => { const px = X(p.x), py = Y(p.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
-        ctx.lineTo(X(pts[pts.length - 1].x), h - pad.b);
-        ctx.lineTo(X(pts[0].x), h - pad.b);
-        ctx.closePath();
-        ctx.fillStyle = g;
-        ctx.fill();
-        ctx.beginPath();
-        pts.forEach((p, i) => { const px = X(p.x), py = Y(p.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        ctx.fillStyle = color;
+        if (opt.steppy) {
+          ctx.lineWidth = 2;
+          strokeGaps(ctx, pts, X, Y, gap);
+          pts.forEach((p) => {
+            ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 4, 0, Math.PI * 2); ctx.fill();
+          });
+        } else {
+          ctx.globalAlpha = 0.45;
+          ctx.lineWidth = 1;
+          strokeGaps(ctx, pts, X, Y, gap);
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 2.2;
+          strokeGaps(ctx, trend, X, Y, gap);
+          const last = pts[pts.length - 1];
+          ctx.beginPath(); ctx.arc(X(last.x), Y(last.y), 3.6, 0, Math.PI * 2); ctx.fill();
+        }
       }
       extras.forEach((p) => {
-        ctx.fillStyle = extra.color || "#F28B5A";
-        ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = opt.color || "#F28B5A";
+        ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 3.4, 0, Math.PI * 2); ctx.fill();
       });
-    }
-
-    function drawLand(canvas, xs, vol, loss) {
-      const { ctx, w, h } = fit(canvas);
-      ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#111217";
-      ctx.fillRect(0, 0, w, h);
-      const pts = [];
-      for (let i = 0; i < xs.length; i++) {
-        if (vol[i] == null || loss[i] == null) continue;
-        pts.push({ x: xs[i], v: vol[i], lo: loss[i] });
-      }
-      const pad = { l: 46, r: 10, t: 10, b: 22 };
-      charts[canvas.id] = { pts, pad, w, h, land: true };
-      if (!pts.length) return;
-      let minX = pts[0].x, maxX = minX, minV = pts[0].v, maxV = minV, minL = pts[0].lo, maxL = minL;
-      pts.forEach((p) => {
-        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-        minV = Math.min(minV, p.v); maxV = Math.max(maxV, p.v);
-        minL = Math.min(minL, p.lo); maxL = Math.max(maxL, p.lo);
-      });
-      if (maxX === minX) maxX += 1;
-      if (maxV === minV) maxV += 1e-6;
-      if (maxL === minL) maxL += 1e-6;
-      const X = (x) => pad.l + ((x - minX) / (maxX - minX)) * (w - pad.l - pad.r);
-      const Y = (v) => h - pad.b - ((v - minV) / (maxV - minV)) * (h - pad.t - pad.b);
-      charts[canvas.id].map = { X, Y, minX, maxX };
-      ctx.strokeStyle = "#2a2a33";
-      ctx.fillStyle = "#9a9aa8";
-      ctx.font = "11px ui-sans-serif";
-      for (let t = 0; t < 4; t++) {
-        const yv = minV + (maxV - minV) * (t / 3);
-        const py = Y(yv);
-        ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(w - pad.r, py); ctx.stroke();
-        ctx.fillText(num(yv), 4, py + 4);
-      }
-      ctx.fillText(String(minX), pad.l, h - 6);
-      ctx.fillText(String(maxX), w - 36, h - 6);
-      ctx.beginPath();
-      pts.forEach((p, i) => { const px = X(p.x), py = Y(p.v); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
-      ctx.strokeStyle = "#2a2a33";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      pts.forEach((p) => {
-        const tL = (p.lo - minL) / (maxL - minL);
-        ctx.fillStyle = `hsl(${210 - tL * 90} 75% 62%)`;
-        ctx.beginPath(); ctx.arc(X(p.x), Y(p.v), 3.4, 0, Math.PI * 2); ctx.fill();
-      });
+      ctx.restore();
     }
 
     function bindTip(canvas) {
@@ -461,7 +491,7 @@
       document.getElementById("h-eta").textContent = clock(last.eta_s);
       setText("k-pace", last.sec_per_step != null ? num(last.sec_per_step, 1) + "s/step" : "—");
       document.getElementById("k-eta").textContent =
-        last.eta_s != null ? ("ETA " + dur(last.eta_s) + (remain != null ? " · " + remain + " steps" : "")) : "need 2+ timestamped lines";
+        last.eta_s != null ? ("ETA " + dur(last.eta_s) + (remain != null ? " · " + remain + " steps" : "")) : "from the train line";
       setText("k-dec", dec.action || "—", dec.action === "promote" ? "down" : (String(dec.action || "").startsWith("abort") ? "up" : ""));
       document.getElementById("k-dec-s").textContent = dec.reason ? ("step " + (dec.step ?? "") + " · " + dec.reason) : "next row at eval_every";
 
@@ -473,11 +503,19 @@
       document.getElementById("leg-ppl").textContent = num(last.ppl);
       document.getElementById("leg-ppl-more").textContent = "best " + num(ps.min);
 
-      drawLine(document.getElementById("loss"), data.steps || [], data.loss || [], "#4C9BE8",
-        { xs: data.steps || [], ys: data.val_loss || [], color: "#F28B5A" });
-      drawLine(document.getElementById("tok"), data.steps || [], data.tok_s || [], "#56C4A0");
-      drawLine(document.getElementById("ppl"), data.steps || [], data.ppl || [], "#B57BED");
-      drawLand(document.getElementById("land"), data.steps || [], data.volatility || [], data.loss || []);
+      const steps = data.steps || [];
+      const loss = data.loss || [];
+      const cut = Math.max(0, steps.length - recentLock);
+      const shown = Math.min(recentLock, steps.length);
+      document.getElementById("leg-recent").textContent = loss.length ? num(loss[loss.length - 1]) : "";
+      document.getElementById("leg-recent-more").textContent =
+        shown ? ("last " + shown + " steps") : "waiting for steps";
+      drawLine(document.getElementById("loss"), steps, loss, "#4C9BE8",
+        { scale: "full", xs: steps, ys: data.val_loss || [], color: "#F28B5A" });
+      drawLine(document.getElementById("tok"), steps, data.tok_s || [], "#56C4A0", { scale: "full" });
+      drawLine(document.getElementById("ppl"), steps, data.ppl || [], "#B57BED", { scale: "full" });
+      drawLine(document.getElementById("land"), steps.slice(cut), loss.slice(cut), "#F0C040",
+        { scale: "full", steppy: true });
 
       const recs = data.decisions || [];
       const empty = document.getElementById("dec-empty");
@@ -505,6 +543,13 @@
       }
     }
 
+    document.querySelectorAll(".win").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        recentLock = Number(btn.dataset.n);
+        document.querySelectorAll(".win").forEach((b) => b.classList.toggle("on", b === btn));
+        tick();
+      });
+    });
     logEl.addEventListener("change", () => { followEl.checked = false; tick(); });
     followEl.addEventListener("change", tick);
     window.addEventListener("resize", () => tick());

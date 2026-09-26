@@ -14,6 +14,9 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from logging_config import logger
 
+# Appended after the trained merges. Not a word-piece, so existing ids stay put.
+END_OF_STORY = "<|endofstory|>"
+
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover - tqdm is optional
@@ -257,6 +260,18 @@ class BPETokenizer:
         self.vocab_size = len(self.vocab)
         logger.info("BPE vocab ready: %s tokens after %s merges", self.vocab_size, len(self.merges))
 
+    def add_special_token(self, token: str) -> int:
+        """Append one id. Does not renumber tokens already in the vocab."""
+        existing = self._token_to_id.get(token)
+        if existing is not None:
+            return int(existing)
+        idx = len(self.vocab)
+        self.vocab.append(token)
+        self._token_to_id[token] = idx
+        self._id_to_token[idx] = token
+        self.vocab_size = len(self.vocab)
+        return idx
+
     def _apply_merges(self, symbols: List[str]) -> List[str]:
         return _apply_merges_seq(symbols, self.merges)
 
@@ -317,25 +332,7 @@ class BPETokenizer:
         n = len(corpus)
         n_workers = _resolve_workers(workers)
         logger.info("BPE-encoding corpus: %s documents (workers=%s)...", n, n_workers)
-
-        pending: List[str] = []
-        seen = set(self._encode_cache)
-        for doc in tqdm(corpus, desc="BPE scan docs", unit="doc", dynamic_ncols=True):
-            for word in _word_tokens(doc):
-                if word not in seen:
-                    seen.add(word)
-                    pending.append(word)
-
-        if pending:
-            # Auto-picked workers skip the pool on tiny unique sets (spawn cost).
-            # An explicit workers= argument always uses the pool so tests can
-            # pin the parallel path.
-            use_pool = n_workers > 1 and (len(pending) >= 512 or workers is not None)
-            if use_pool:
-                self._fill_cache_parallel(pending, n_workers)
-            else:
-                for word in tqdm(pending, desc="BPE encode words", unit="word", dynamic_ncols=True):
-                    self._encode_word(word)
+        self._cache_corpus_words(corpus, n_workers, workers)
 
         space_ids = self._encode_word(" ")
         chunks: List[List[int]] = []
@@ -359,6 +356,77 @@ class BPETokenizer:
             len(tokens), n, len(self._encode_cache),
         )
         return tokens
+
+    def _cache_corpus_words(self, corpus: List[str], n_workers: int, workers: Optional[int]) -> None:
+        pending: List[str] = []
+        seen = set(self._encode_cache)
+        for doc in tqdm(corpus, desc="BPE scan docs", unit="doc", dynamic_ncols=True):
+            for word in _word_tokens(doc):
+                if word not in seen:
+                    seen.add(word)
+                    pending.append(word)
+
+        if not pending:
+            return
+        # Auto-picked workers skip the pool on tiny unique sets (spawn cost).
+        # An explicit workers= argument always uses the pool so tests can
+        # pin the parallel path.
+        use_pool = n_workers > 1 and (len(pending) >= 512 or workers is not None)
+        if use_pool:
+            self._fill_cache_parallel(pending, n_workers)
+        else:
+            for word in tqdm(pending, desc="BPE encode words", unit="word", dynamic_ncols=True):
+                self._encode_word(word)
+
+    def encode_stories(
+        self,
+        corpus: List[str],
+        eos_id: int,
+        workers: Optional[int] = None,
+    ) -> "tuple[np.ndarray, np.ndarray]":
+        """Encode each doc and append ``eos_id``. Returns tokens and [start, end) spans.
+
+        Spans cover that doc plus its end token. Docs are not joined by a space,
+        so a window can be cut on ``spans`` without crossing stories.
+        """
+        import numpy as np
+
+        n = len(corpus)
+        n_workers = _resolve_workers(workers)
+        logger.info(
+            "BPE-encoding %s stories with end token id %s (workers=%s)...",
+            n, eos_id, n_workers,
+        )
+        self._cache_corpus_words(corpus, n_workers, workers)
+        chunks: List[List[int]] = []
+        buf: List[int] = []
+        spans: List[Tuple[int, int]] = []
+        cursor = 0
+        cache = self._encode_cache
+        eos = int(eos_id)
+        for doc in tqdm(corpus, desc="BPE stitch stories", unit="doc", dynamic_ncols=True):
+            start = cursor
+            for word in _word_tokens(doc):
+                piece = cache[word] if word in cache else self._encode_word(word)
+                buf.extend(piece)
+                cursor += len(piece)
+            buf.append(eos)
+            cursor += 1
+            spans.append((start, cursor))
+            if len(buf) >= 1_000_000:
+                chunks.append(buf)
+                buf = []
+        if buf:
+            chunks.append(buf)
+        if not chunks:
+            return np.array([], dtype=np.int64), np.zeros((0, 2), dtype=np.int64)
+        tokens = np.concatenate([np.asarray(c, dtype=np.int64) for c in chunks])
+        span_arr = np.asarray(spans, dtype=np.int64)
+        logger.info(
+            "BPE story encode done: %s tokens, %s stories (end id %s)",
+            len(tokens), len(span_arr), eos,
+        )
+        return tokens, span_arr
 
     def decode(self, ids: List[int]) -> str:
         return "".join(self._id_to_token.get(i, "") for i in ids)
@@ -410,3 +478,14 @@ class BPETokenizer:
             "chars_covered_in_window": float(len(decoded)),
             "compression_vs_chars": float(char_len) / max(1, len(ids)),
         }
+
+
+def end_of_story_id(tokenizer) -> Optional[int]:
+    """Id of END_OF_STORY, or None when this vocab has no story boundary."""
+    lookup = getattr(tokenizer, "token_to_id", None)
+    if lookup is None:
+        return None
+    tid = lookup(END_OF_STORY)
+    if tid is None or int(tid) < 0:
+        return None
+    return int(tid)

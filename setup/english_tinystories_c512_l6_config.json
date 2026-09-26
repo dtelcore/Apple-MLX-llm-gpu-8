@@ -3,7 +3,7 @@
     "name": "english_tinystories_c512_l6",
     "vocab_size": null,
     "max_len": 256,
-    "embedding_dim": 512,
+    "embedding_dim": 1024,
     "num_heads": 8,
     "num_layers": 6,
     "dropout_prob": 0.0,
@@ -12,8 +12,8 @@
     "pos_encoding": "rope",
     "init_scale": 0.02,
     "residual_scale": true,
-    "layer_strategy": "resident",
-    "description": "Open English on TinyStories only. C=512 L=6 H=8 head=64 T=256, GPT-2 residual scale 1/sqrt(2L). Same TinyStories BPE as c256. New weights. Do not --resume english_tinystories_c256_l6. 2 GB cap hardcoded."
+    "layer_strategy": "stream",
+    "description": "Open English on TinyStories only. C=1024 L=6 H=8 head=128 T=256, layer stream, GPT-2 residual scale 1/sqrt(2L). Same 6000 BPE merges as c256, plus <|endofstory|>. Story windows do not cross stories. New weights. Do not --resume english_tinystories_c256_l6 or the 2000 smoke. 2 GB cap hardcoded."
   },
   "dataset": {
     "name": "tinystories",
@@ -21,15 +21,15 @@
     "tokenizer": "bpe",
     "bpe_merges": 6000,
     "vocab_size": null,
-    "vocab_path": "data/tinystories/vocab.json",
-    "token_dir": "data/tinystories"
+    "vocab_path": "data/tinystories_packed/vocab.json",
+    "token_dir": "data/tinystories_packed"
   },
   "weight_initialization": {},
   "hyperparameters": {
     "name": "english_tinystories_c512_l6",
     "learning_rate": 0.0012,
     "weight_decay": 0.02,
-    "batch_size": 8,
+    "batch_size": 4,
     "num_epochs": 1,
     "warmup_steps": 600,
     "gradient_clip": 1.0,
@@ -43,6 +43,6 @@
   },
   "metadata": {
     "created": "english-tinystories-c512-l6",
-    "description": "Wider residual stream on the existing TinyStories token shards. Same BPE, same windows. 8192 tokens per optimizer step (batch 8 x accum 4, effective batch 32). Fresh init. One epoch is ≈188444 optimizer steps. Do not resume the c256 checkpoint."
+    "description": "Story-packed TinyStories. <|endofstory|> between stories, windows stay inside one story, short stories padded. Same 6000 merges as c256 plus one end token. Fresh init. Do not resume c256 or the 2000 smoke."
   }
 }

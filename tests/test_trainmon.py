@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
+import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -106,23 +109,74 @@ class TrainmonAppTests(unittest.TestCase):
             self.assertEqual(body["steps"], [10, 20, 30])
             self.assertAlmostEqual(body["tok_s"][0], 120.0)
 
-    def test_prefers_live_unguided_over_training_log(self):
+    def test_prefers_the_live_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs = Path(tmp) / "logs"
             logs.mkdir()
-            old = logs / "training.log"
+            now = time.time()
+            old = logs / "unguided_finished.log"
             _write_train_log(old)
-            live = logs / "unguided_Unguarded-Initialv7-Run.log"
+            os.utime(old, (now - 3600, now - 3600))
+            live = logs / "training_english_tinystories_c512_l6.log"
             _write_train_log(live)
-            # Make the aggregate log look newer so mtime-only pick would be wrong.
-            old.write_text(old.read_text(encoding="utf-8") + "[train] step=40/500 loss=1.0 ppl=2 tok_s=1\n", encoding="utf-8")
+            os.utime(live, (now, now))
             app = create_trainmon(log_dir=logs)
             client = app.test_client()
             listing = client.get("/api/logs").get_json()
-            self.assertEqual(listing["preferred"], "unguided_Unguarded-Initialv7-Run.log")
-            self.assertEqual(listing["logs"][0]["kind"], "unguided")
+            self.assertEqual(listing["preferred"], live.name)
+            self.assertTrue(listing["logs"][0]["live"])
             series = client.get("/api/series").get_json()
-            self.assertEqual(series["log"], "unguided_Unguarded-Initialv7-Run.log")
+            self.assertEqual(series["log"], live.name)
+
+    def test_dropdown_keeps_five_newest_run_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            logs.mkdir()
+            now = time.time()
+            for i in range(7):
+                path = logs / f"training_run{i}.log"
+                _write_train_log(path)
+                os.utime(path, (now - (7 - i) * 120, now - (7 - i) * 120))
+            aggregate = logs / "training.log"
+            _write_train_log(aggregate)
+            os.utime(aggregate, (now, now))
+            generate = logs / "generate_story.log"
+            _write_train_log(generate)
+            os.utime(generate, (now, now))
+            live = logs / "training_smoke.log"
+            _write_train_log(live)
+            os.utime(live, (now, now))
+            listing = create_trainmon(log_dir=logs).test_client().get("/api/logs").get_json()
+            names = [row["name"] for row in listing["logs"]]
+            self.assertEqual(len(names), 5)
+            self.assertEqual(names[0], "training_smoke.log")
+            self.assertEqual(listing["preferred"], "training_smoke.log")
+            self.assertNotIn("training.log", names)
+            self.assertNotIn("generate_story.log", names)
+            self.assertNotIn("training_run0.log", names)
+            self.assertNotIn("training_run1.log", names)
+
+    def test_clock_uses_the_train_line_not_the_file_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "training_smoke.log"
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log.write_text(
+                "\n".join(
+                    [
+                        "2020-01-01 00:00:00 | INFO | llm_gpu | [train] step=400000/400000 epoch=1 loss=1.0000 ppl=2.72 tok_s=11000 elapsed_s=140000 eta_s=0 step_ms=360",
+                        f"{stamp} | INFO | llm_gpu | [train] step=19/2000 epoch=1 loss=4.5000 ppl=90 tok_s=1500 elapsed_s=31.00 eta_s=400.00 step_ms=4200",
+                        f"{stamp} | INFO | llm_gpu | [train] step=20/2000 epoch=1 loss=4.4000 ppl=81.5 tok_s=1550 lr=4e-05 elapsed_s=42.00 eta_s=380.00 step_ms=4200",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = series_payload(log, keep_short=True)
+            self.assertAlmostEqual(payload["last"]["elapsed_s"], 42.0, delta=5)
+            self.assertAlmostEqual(payload["last"]["eta_s"], 380.0, delta=5)
+            self.assertAlmostEqual(payload["last"]["sec_per_step"], 4.2, delta=0.05)
+            self.assertEqual(payload["last"]["step"], 20)
+            self.assertEqual(payload["steps"], [19, 20])
 
     def test_rejects_path_outside_log_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -23,6 +23,7 @@ import numpy as np
 import cli_common
 from logging_config import logger, setup_generate_run_logging
 from model.gpt import GPTModel
+from tokenizer.bpe import end_of_story_id
 from paths import DEFAULT_CHECKPOINT_DIR, OUTPUT_CHECKPOINTS, ensure_output_dirs
 from training.checkpoint import load_checkpoint
 from training.memory_controller import apply_generate_plan
@@ -110,6 +111,8 @@ def generate(args: argparse.Namespace) -> str:
         tracer.dump_tokens(prompt_ids, tokenizer, label="prompt")
 
     stop_strings = getattr(args, "stop", None) or None
+    eos_id = end_of_story_id(tokenizer)
+    stop_ids = [eos_id] if eos_id is not None else None
     need_tokenizer = tracer.any_enabled or bool(stop_strings)
     generated_ids = model.generate(
         prompt_ids,
@@ -123,6 +126,7 @@ def generate(args: argparse.Namespace) -> str:
         use_kv_cache=not getattr(args, "no_kv_cache", False),
         use_cuda_graph=bool(getattr(args, "cuda_graph", False)),
         stop_strings=stop_strings,
+        stop_ids=stop_ids,
     )
 
     if getattr(args, "cuda_graph", False) and getattr(model, "_cuda_graph_status", None):

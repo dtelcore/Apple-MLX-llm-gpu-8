@@ -685,10 +685,16 @@ def rmsnorm_backward(
 
 
 def cross_entropy(logits: DeviceArray, targets: np.ndarray):
-    """Mean CE. logits [rows, V], targets [rows] int. Returns (loss, dlogits)."""
+    """Mean CE. logits [rows, V], targets [rows] int. Returns (loss, dlogits).
+
+    Targets below 0 are padding: dropped from the mean, zero gradient.
+    """
     x = as_mx(logits)
     rows = int(x.shape[0])
-    targets_mx = mx.array(np.ascontiguousarray(targets, dtype=np.int32).reshape(-1))
+    targets_np = np.ascontiguousarray(targets, dtype=np.int32).reshape(-1)
+    if np.any(targets_np < 0):
+        return _cross_entropy_masked(x, targets_np, rows)
+    targets_mx = mx.array(targets_np)
     shifted = x - mx.max(x, axis=-1, keepdims=True)
     exp = mx.exp(shifted)
     probs = exp / mx.sum(exp, axis=-1, keepdims=True)
@@ -698,6 +704,31 @@ def cross_entropy(logits: DeviceArray, targets: np.ndarray):
     onehot = mx.zeros_like(probs)
     onehot = onehot.at[idx, targets_mx].add(1.0)
     d_logits = (probs - onehot) / mx.array(float(rows))
+    eval_for_host(DeviceArray(loss), DeviceArray(d_logits))
+    return float(np.asarray(loss)), DeviceArray(d_logits)
+
+
+def _cross_entropy_masked(x, targets_np: np.ndarray, rows: int):
+    """Mean CE over targets >= 0. Ignored rows get a zero gradient."""
+    valid_np = targets_np >= 0
+    n_valid = int(valid_np.sum())
+    if n_valid == 0:
+        zeros = mx.zeros_like(x)
+        loss0 = mx.array(0.0)
+        eval_for_host(DeviceArray(loss0), DeviceArray(zeros))
+        return 0.0, DeviceArray(zeros)
+    safe = np.where(valid_np, targets_np, 0).astype(np.int32, copy=False)
+    mask = mx.array(valid_np.astype(np.float32))
+    shifted = x - mx.max(x, axis=-1, keepdims=True)
+    exp = mx.exp(shifted)
+    probs = exp / mx.sum(exp, axis=-1, keepdims=True)
+    idx = mx.arange(rows)
+    correct = probs[idx, mx.array(safe)]
+    logp = mx.log(mx.clip(correct, 1e-12, None))
+    loss = -mx.sum(logp * mask) / mx.array(float(n_valid))
+    onehot = mx.zeros_like(probs)
+    onehot = onehot.at[idx, mx.array(safe)].add(mask)
+    d_logits = (probs - onehot) * mask.reshape(-1, 1) / mx.array(float(n_valid))
     eval_for_host(DeviceArray(loss), DeviceArray(d_logits))
     return float(np.asarray(loss)), DeviceArray(d_logits)
 

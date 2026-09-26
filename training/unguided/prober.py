@@ -21,6 +21,7 @@ from typing import Any, Optional, Sequence
 import numpy as np
 
 from paths import DATA_DIR, OUTPUT_CHECKPOINTS, OUTPUT_ROOT
+from tokenizer.bpe import end_of_story_id
 from training.cabinet_diagnostics import answers_match, classify_generation, normalize_answer
 from training.cabinet_index import CabinetFact, CabinetIndex, load_cabinet, normalize_question
 from training.chat_format import CHAT_STOP_STRINGS, sanitize_assistant_reply
@@ -392,6 +393,7 @@ def generate_english_continuation(
     prompt_ids = tokenizer.encode(prompt_text)
     if not prompt_ids:
         return ""
+    eos_id = end_of_story_id(tokenizer)
     generated_ids = model.generate(
         prompt_ids,
         max_new_tokens=int(max_new_tokens),
@@ -402,6 +404,7 @@ def generate_english_continuation(
         rng=np.random.default_rng(int(seed)),
         use_kv_cache=True,
         stop_strings=None,
+        stop_ids=[eos_id] if eos_id is not None else None,
     )
     new_ids = generated_ids[len(prompt_ids) :]
     return tokenizer.decode(new_ids).strip()

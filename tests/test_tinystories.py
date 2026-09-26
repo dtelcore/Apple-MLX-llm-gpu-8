@@ -48,7 +48,11 @@ class ConfigPolicyTests(unittest.TestCase):
     def test_c512_recipe_keeps_data_and_widens_the_stream(self):
         recipe = json.loads((_ROOT / "setup" / "english_tinystories_c512_l6_config.json").read_text(encoding="utf-8"))
         narrow = json.loads((_ROOT / "setup" / "english_tinystories_c256_l6_config.json").read_text(encoding="utf-8"))
-        self.assertEqual(recipe["dataset"], narrow["dataset"])
+        self.assertEqual(recipe["dataset"]["vocab_path"], "data/tinystories_packed/vocab.json")
+        self.assertEqual(recipe["dataset"]["token_dir"], "data/tinystories_packed")
+        self.assertNotEqual(recipe["dataset"]["token_dir"], narrow["dataset"]["token_dir"])
+        self.assertEqual(recipe["dataset"]["combine"], narrow["dataset"]["combine"])
+        self.assertEqual(recipe["dataset"]["bpe_merges"], narrow["dataset"]["bpe_merges"])
         self.assertEqual(recipe["model"]["embedding_dim"], 512)
         self.assertEqual(recipe["model"]["num_layers"], 6)
         self.assertEqual(recipe["model"]["num_heads"], 8)

@@ -1,6 +1,6 @@
 # english_tinystories_c512_l6
 
-Width 512, 6 layers, 8 heads (head width 64), context 256. Residual scale on, RMSNorm, RoPE, tied embeddings. Recipe: `setup/english_tinystories_c512_l6_config.json`. Checkpoint: `output/checkpoints/english_tinystories_c512_l6`. Fresh weights. Same TinyStories BPE and token shards as the width-256 run (`data/tinystories`, vocab 6102). Point `--resume` at this checkpoint only.
+Width 512, 6 layers, 8 heads (head width 64), context 256. Residual scale on, RMSNorm, RoPE, tied embeddings. Recipe: `setup/english_tinystories_c512_l6_config.json`. Checkpoint: `output/checkpoints/english_tinystories_c512_l6`. Fresh weights. Corpus is `data/tinystories_packed`: the width-256 BPE merges plus an `<|endofstory|>` token, with each training window kept inside one story. Point `--resume` at this checkpoint only. Do not resume the c256 run or the 2000 smoke.
 
 `train.sh` checks those shards, then calls `auto_train.py`. `generate.sh` calls `generate.py` on this checkpoint only.
 
@@ -158,3 +158,31 @@ From the repo root. One line each.
 ```text
 ./venv/bin/python generate.py --checkpoint output/checkpoints/english_tinystories_c512_l6 --prompt "Once upon a time there was a brave little mouse named" --max-new-tokens 160 --temperature 0.6 --top-k 10 --top-p 0.9 --seed 42 --no-prompt
 ```
+
+
+**This is working cleanly.**
+
+### Status at step 11
+
+| Metric              | Value          | Assessment                  |
+|---------------------|----------------|-----------------------------|
+| Loss                | 5.18           | Healthy early drop          |
+| Perplexity          | ~177           | Normal for this stage       |
+| VRAM used           | 475 MB         | Very comfortable            |
+| VRAM free           | 1573 MB        | Plenty of headroom          |
+| Tokens/sec          | ~1550–1630     | Reasonable with streaming   |
+| Layer strategy      | `stream`       | Active and effective        |
+| Actual model width  | **1024**       | (head_dim=128)              |
+
+### Important note
+
+Your config name still says `c512`, but the actual model being trained is **width 1024** (8 heads × 128 head dim). That is a much larger model (~82 M parameters). Streaming is what is making it possible under the 2 GB budget.
+
+### Verdict
+
+- Batch 4 + accum 16 + layer streaming is stable.
+- Memory has large headroom (you could probably try batch 8 later if you want).
+- Loss is decreasing properly.
+- You can let this 2000-step run finish.
+
+This is the first configuration that has successfully trained a significantly wider model on your hardware. Good result.

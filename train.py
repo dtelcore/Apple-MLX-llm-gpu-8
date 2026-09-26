@@ -239,12 +239,13 @@ def _build_prebuilt_windowed_dataset(
     token_dir: str,
     split: str,
 ) -> WindowedDataset:
-    from training.tinystories_tokens import load_split_tokens
+    from training.tinystories_tokens import load_story_pack
 
-    tokens = load_split_tokens(token_dir, split)
+    tokens, spans, pad_id = load_story_pack(token_dir, split)
     return WindowedDataset(
         [], tokenizer, max_len, batch_size,
         window_stride=window_stride, tokens=tokens, copy_tokens=False,
+        spans=spans, pad_id=pad_id,
     )
 
 
