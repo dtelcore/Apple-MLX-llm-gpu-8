@@ -45,6 +45,24 @@ class ConfigPolicyTests(unittest.TestCase):
         self.assertTrue(dataset_uses_prebuilt_tokens(recipe["dataset"]))
         self.assertFalse(dataset_uses_prebuilt_tokens({"name": "chat_facts_v7", "path": "data/chat_facts_v7.jsonl"}))
 
+    def test_c512_recipe_keeps_data_and_widens_the_stream(self):
+        recipe = json.loads((_ROOT / "setup" / "english_tinystories_c512_l6_config.json").read_text(encoding="utf-8"))
+        narrow = json.loads((_ROOT / "setup" / "english_tinystories_c256_l6_config.json").read_text(encoding="utf-8"))
+        self.assertEqual(recipe["dataset"], narrow["dataset"])
+        self.assertEqual(recipe["model"]["embedding_dim"], 512)
+        self.assertEqual(recipe["model"]["num_layers"], 6)
+        self.assertEqual(recipe["model"]["num_heads"], 8)
+        self.assertEqual(recipe["model"]["embedding_dim"] % recipe["model"]["num_heads"], 0)
+        self.assertEqual(recipe["model"]["embedding_dim"] // recipe["model"]["num_heads"], 64)
+        self.assertEqual(recipe["model"]["max_len"], 256)
+        self.assertEqual(recipe["hyperparameters"]["batch_size"], 8)
+        self.assertEqual(recipe["hyperparameters"]["gradient_accumulation_steps"], 4)
+        self.assertEqual(recipe["hyperparameters"]["learning_rate"], 0.0012)
+        self.assertEqual(recipe["hyperparameters"]["weight_decay"], 0.02)
+        self.assertEqual(recipe["hyperparameters"]["warmup_steps"], 1000)
+        self.assertEqual(recipe["hyperparameters"]["min_lr_ratio"], 0.05)
+        self.assertTrue(dataset_uses_prebuilt_tokens(recipe["dataset"]))
+
     def test_policy_budget(self):
         policy = json.loads((_ROOT / "setup" / "unguided_tinystories_policy.json").read_text(encoding="utf-8"))
         self.assertEqual(policy["probe_mode"], "tinystories")
