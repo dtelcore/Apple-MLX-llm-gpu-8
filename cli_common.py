@@ -71,7 +71,7 @@ def add_config_arg(parser: argparse.ArgumentParser, default: Optional[str] = Non
     default_path = str(default or DEFAULT_CONFIG_PATH)
     parser.add_argument(
         "--config", type=str, default=default_path,
-        help="Path to training_config.json (missing default copies setup/story_sub1m_config.json)",
+        help="Path to training_config.json (missing default copies legacy/setup/story_sub1m_config.json)",
     )
 
 

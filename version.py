@@ -1,4 +1,4 @@
-"""Project version. 0.1.0 is the hybrid-learner re-architecture."""
+"""Project version. 0.1.1 trains story-packed TinyStories. 0.1.0 is the hybrid learner."""
 
 from pathlib import Path
 

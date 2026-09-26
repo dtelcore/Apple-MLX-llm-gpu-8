@@ -4,6 +4,7 @@ From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
 
+**v0.1.1** — story-packed TinyStories (`english_tinystories_c1024_l6`).
 **v0.1.0** — hybrid learner: frozen fact cabinet + separate TinyStories English
 brain. **v0.0.9** — unguided trainer + autotrainer daemon. **v0.0.8** — **App.py**
 (chat + weight viewer + model selector). Router is from 0.0.7 (cabinet → calc →
@@ -19,17 +20,17 @@ black-box mini ChatGPT. Hand VJPs and a hardcoded **2 GB** Metal budget stay.
 | | **Fact brain** | **English brain** | **Router** |
 |---|---|---|---|
 | Role | Frozen recitation cabinet | Open English (TinyStories) | Python, inspectable |
-| Checkpoint | `chat_facts_v7` / v9 | `english_tinystories_*` | — |
-| Shape | C=512 · L=16 · T=512 | C=256 · L=6 · T=256 first | — |
-| Vocab | Cabinet BPE (~4k) | TinyStories-only BPE (4–8k) | — |
+| Checkpoint | `chat_facts_v7` / v9 | `english_tinystories_c1024_l6` | — |
+| Shape | C=512 · L=16 · T=512 | C=1024 · L=6 · T=256, stream | — |
+| Vocab | Cabinet BPE (~4k) | TinyStories BPE plus end-of-story token (6103) | — |
 | Objective | Exact `User:` → stored answer | Coherent multi-sentence text | cabinet → calc → English → wiki/tools |
 | Status | Product; do not train more v7 | Active learning path | Unchanged kernel |
 
 Do not `--resume` across vocab, architecture, or mix changes. Do not resume a
 cabinet BPE into TinyStories. Do not train more v7 or rebuild its mix for alias
 fixes. Pre-0.1.0 English runs (`english_phase1` on wiki prose, fact-inject, v10
-mixes) live under [`legacy/`](legacy/README_legacy.md). `data/train.txt` is not
-the English corpus.
+mixes) and the 0.1.0 TinyStories checkpoints live under
+[`legacy/`](legacy/README_legacy.md). `data/train.txt` is not the English corpus.
 
 
 ```bash
@@ -38,22 +39,24 @@ python3.11 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python setup/2_test_workspace.py          # Metal + matmul + memory APIs
 python -m tests.parity.run_parity
-python auto_train.py --config setup/story_c256_l6_config.json --steps 20 --no-prompt
+python auto_train.py --config legacy/setup/story_c256_l6_config.json --steps 20 --no-prompt
 python generate_config.py          # write a setup/*.json recipe (C/H/L/T/B)
 python tools/wikidata_to_facts.py  # optional: SPARQL → data/facts/wikidata_facts.txt
 python tools/wikidata_to_facts2.py # optional: tech/health/maths → data/facts/*_facts.txt
 python tools/make_fact_mix.py      # repeat facts → data/chat_facts.jsonl
-python auto_train.py --config setup/chat_facts_config.json --checkpoint output/checkpoints/chat_facts_v5 --steps 1000 --no-prompt
+python auto_train.py --config legacy/setup/chat_facts_config.json --checkpoint output/checkpoints/chat_facts_v5 --steps 1000 --no-prompt
 python interactive.py --checkpoint output/checkpoints/chat_facts_v4 --chat
 python App.py
 python App.py --checkpoint output/checkpoints/chat_facts_v6 --chat
 python webui.py --checkpoint output/checkpoints/chat_facts_v5 --chat
 python npzviewer.py --open output/checkpoints/chat_facts_v6/weights.npz
 python trainmon.py
-python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
+python unguided_trainer.py --config legacy/setup/chat_facts_v7_config.json --policy legacy/setup/unguided_v7_policy.json --dry-run
 python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
 python tools/prepare_tinystories.py
-python unguided_trainer.py --config setup/english_tinystories_c256_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
+python tools/prepare_tinystories.py --pack-stories --skip-download --text-dir data/tinystories/text --vocab data/tinystories/vocab.json
+python setup/english_tinystories_c1024_l6/check_data.py
+python unguided_trainer.py --config setup/english_tinystories_c1024_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
 ```
 
 Chat checkpoints default to a **Python router**: exact cabinet hit → generate the
@@ -73,16 +76,19 @@ in one process.
 `--no-search` skips the network. Do not `combine` `data/*.txt`. Do not
 `--resume` v6 into v7.
 
-Active English recipe: `setup/english_tinystories_c256_l6_config.json` on
-`data/tinystories/` after `python tools/prepare_tinystories.py` (C=256, L=6,
-T=256, batch 4, accum 4, GPT-2 residual scale, TinyStories-only BPE). Older
-shape references: `setup/story_c256_l6_config.json` and
-`setup/story_sub1m_config.json`. Wiki-prose Phase 1 / v10 commands are under
+Active English recipe: `setup/english_tinystories_c1024_l6_config.json` on
+`data/tinystories_packed/` (C=1024, L=6, T=256, stream, batch 4, accum 16,
+16,384 tokens/step). Build the packed shards with
+`python tools/prepare_tinystories.py --pack-stories` after the plain prepare
+has written `data/tinystories/`. Setup notes:
+[`setup/english_tinystories_c1024_l6/README.md`](setup/english_tinystories_c1024_l6/README.md).
+The 0.1.0 c256 recipe, the step-2000 smoke, and older shape references
+(`story_c256_l6`, `story_sub1m`, cabinet recipes) are under
 [`legacy/`](legacy/README_legacy.md).
 
 Chat cabinet (memorize your Q&A, not Wikipedia): native lines in
 `data/user_facts.txt` and `data/facts/*.txt`, mix with `tools/make_fact_mix.py`,
-train `setup/chat_facts_config.json` on `data/chat_facts.jsonl` only. Do not
+train `legacy/setup/chat_facts_config.json` on `data/chat_facts.jsonl` only. Do not
 `combine` `data/*.txt`. Probe with the **exact** `User:` wording and `--stop User:`.
 A few dozen facts at ~300 repeats stick; hundreds of unique facts at 20 repeats do not.
 
@@ -107,6 +113,7 @@ Software (see `CHANGELOG.md` for detail):
 | 0.0.8 | `App.py` (chat + pick-a-neuron + selector), related chips, topic/`the` aliases |
 | 0.0.9 | Unguided trainer kernel + autotrainer daemon + train monitor |
 | 0.1.0 | Dual brain: frozen v7/v9 cabinet + TinyStories English; wiki-prose English → `legacy/` |
+| 0.1.1 | Story-packed TinyStories, C=1024 L=6; 0.1.0 runs and setup JSON → `legacy/` |
 
 Cabinet checkpoints under `output/checkpoints/`:
 
@@ -146,7 +153,7 @@ Knobs, cheapest quality impact first:
 
 ```bash
 # default: autoscale inside 2 GB (may enable stream before shrinking T)
-python auto_train.py --config setup/story_c256_l6_config.json --no-prompt
+python auto_train.py --config legacy/setup/story_c256_l6_config.json --no-prompt
 
 # force stream (L=6 bring-up / deep stacks)
 python auto_train.py --config ... --layer-stream --no-prompt

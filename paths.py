@@ -32,6 +32,7 @@ OUTPUT_CACHE_TOKENIZER = OUTPUT_CACHE / "tokenizer"
 
 DATA_DIR = PROJECT_ROOT / "data"
 SETUP_DIR = PROJECT_ROOT / "setup"
+LEGACY_SETUP_DIR = PROJECT_ROOT / "legacy" / "setup"
 
 DEFAULT_CONFIG_PATH = OUTPUT_CONFIGS / "training_config.json"
 DEFAULT_CHECKPOINT_DIR = OUTPUT_CHECKPOINTS / "run1"
@@ -40,7 +41,7 @@ DEFAULT_TRAINING_PLOT = OUTPUT_LOGS / "training_plot_latest.png"
 DEFAULT_LANDSCAPE_PLOT = OUTPUT_LOGS / "loss_landscape_latest.png"
 
 # Bundled first-run defaults (committed). Copied into output/ / data/ when missing.
-BUNDLED_DEFAULT_CONFIG = SETUP_DIR / "story_sub1m_config.json"
+BUNDLED_DEFAULT_CONFIG = LEGACY_SETUP_DIR / "story_sub1m_config.json"
 BUNDLED_SMOKE_CORPUS = SETUP_DIR / "smoke_english.txt"
 
 # Legacy locations (pre-output/ migration) — still honored when passed explicitly.

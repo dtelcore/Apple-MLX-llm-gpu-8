@@ -33,9 +33,9 @@ from setup.model_config import estimate_vram_footprint
 from training.memory_controller import plan_train, usable_bytes
 
 _BASE_RECIPES = (
-    ("story", SETUP_DIR / "story_c256_l6_config.json"),
-    ("chat", SETUP_DIR / "chat_c256_l6_config.json"),
-    ("fast", SETUP_DIR / "story_sub1m_config.json"),
+    ("story", ROOT / "legacy" / "setup" / "story_c256_l6_config.json"),
+    ("chat", ROOT / "legacy" / "setup" / "chat_c256_l6_config.json"),
+    ("fast", ROOT / "legacy" / "setup" / "story_sub1m_config.json"),
 )
 
 _EST_VOCAB = 4112
@@ -353,7 +353,7 @@ def _pick_base(from_path: Optional[Path]) -> Tuple[str, Dict[str, Any], Path]:
     print("  4. path to an existing JSON")
     choice = _prompt("Select", "2")
     if choice == "4":
-        raw = _prompt("JSON path", str(SETUP_DIR / "chat_c256_l6_config.json"))
+        raw = _prompt("JSON path", str(ROOT / "legacy" / "setup" / "chat_c256_l6_config.json"))
         path = Path(raw)
         if not path.is_absolute():
             path = ROOT / path

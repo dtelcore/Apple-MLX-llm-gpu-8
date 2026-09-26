@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "data" / "tinystories" / "manifest.json"
 EXPECTED_SHA = "a486e56b3cbafbac6ca685039a5bf7402af663b3f2a05e943eb1ab24bc9f0fda"
 EXPECTED_VOCAB = 6102

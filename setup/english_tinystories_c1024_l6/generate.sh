@@ -1,13 +1,13 @@
 #!/bin/bash
-# Story sample from the c512 checkpoint. Prompt defaults to the tracked mouse opening.
+# Story sample from the v0.1.1 checkpoint. Stops on <|endofstory|>.
 # Usage:
-#   setup/english_tinystories_c512_l6/generate.sh
-#   setup/english_tinystories_c512_l6/generate.sh "Once upon a time there was a little girl named Lily who found a"
+#   setup/english_tinystories_c1024_l6/generate.sh
+#   setup/english_tinystories_c1024_l6/generate.sh "Once upon a time there was a little girl named Lily who found a"
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-CKPT="output/checkpoints/english_tinystories_c512_l6"
+CKPT="output/checkpoints/english_tinystories_c1024_l6"
 PROMPT="${1:-Once upon a time there was a brave little mouse named}"
 
 if [[ ! -f "$CKPT/weights.npz" ]]; then

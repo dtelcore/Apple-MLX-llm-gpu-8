@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.1 — Story-packed TinyStories
+
+Active English is a fresh checkpoint, `english_tinystories_c1024_l6`.
+C=1024, L=6, H=8, T=256, layer stream. Batch 4, accum 16 (16,384 tokens
+per optimizer step), learning rate 0.0012, warmup 600, `min_lr_ratio` 0.05.
+The first cosine length is 4,000 steps.
+
+Training text is `data/tinystories_packed/`. Stories are separated by
+`<|endofstory|>` (vocab 6103; the 6,000 merges from 0.1.0 stay, ids unchanged).
+Windows stay inside one story. Short stories are padded and those positions
+are ignored by the loss. Generation stops on the end token.
+
+`tools/prepare_tinystories.py` still builds the space-joined BPE corpus in
+`data/tinystories/`. `--pack-stories --vocab data/tinystories/vocab.json`
+writes the packed corpus beside it and will not overwrite the 0.1.0 shards.
+
+0.1.0 checkpoints, logs, and setup JSON now live under `legacy/`. Do not
+`--resume` `english_tinystories_c256_l6` or the step-2000 smoke into this
+recipe: the vocabulary grew by one token, and a resume does not stretch
+the cosine. Product chat stays `chat_facts_v7`.
+
+Recipe: `setup/english_tinystories_c1024_l6_config.json`.
+Setup: `setup/english_tinystories_c1024_l6/`.
+Policy: `setup/unguided_tinystories_policy.json`.
+
 ## 0.1.0 — Re-architecture: from closed cabinet to hybrid learner
 
 Product chat remains `chat_facts_v7` / v9 (frozen fact brain).

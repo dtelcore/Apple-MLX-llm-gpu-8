@@ -1,6 +1,6 @@
 # Setup Directory: Complete Training Configuration System
 
-Current state: setup still drives model, dataset, and weight-init configuration. For a **fast story model under 1M params**, use `train.py --menu` → scaling preset **2** (`story_sub1m`) or `setup/story_sub1m_config.json`. For the larger GT 730 TinyStories recipe (~3M), use preset **3**. For a ~5M dialogue model, use preset **4** (`chat_5m`) or `setup/chat_5m_config.json` — see **[`../guide.md`](../guide.md)**.
+Current state: the v0.1.1 English recipe is [`english_tinystories_c1024_l6_config.json`](english_tinystories_c1024_l6_config.json) with notes in [`english_tinystories_c1024_l6/README.md`](english_tinystories_c1024_l6/README.md). Older JSON recipes (`story_sub1m`, `chat_5m`, cabinet, 0.1.0 TinyStories) are in [`../legacy/setup/`](../legacy/setup/). Setup still drives model, dataset, and weight-init configuration. See **[`../guide.md`](../guide.md)**.
 
 Complete infrastructure for model configuration, dataset selection, weight initialization, and training hyperparameter setup for the Kepler GT 730 GPU training system.
 

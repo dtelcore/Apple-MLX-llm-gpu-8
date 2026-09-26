@@ -175,7 +175,7 @@ class StorySub1mPresetTests(unittest.TestCase):
         self.assertEqual(PRESETS["story_sub1m"]["embedding_dim"], 128)
 
     def test_ready_config_matches_preset(self):
-        config_path = _ROOT / "setup" / "story_sub1m_config.json"
+        config_path = _ROOT / "legacy" / "setup" / "story_sub1m_config.json"
         with open(config_path, encoding="utf-8") as handle:
             config = json.load(handle)
         model, hyperparams, dataset_name = apply_scale_preset("story_sub1m", vocab_size=256)

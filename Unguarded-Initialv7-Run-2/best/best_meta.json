@@ -1,8 +1,0 @@
-{
-  "version": "0.0.9",
-  "source": "Unguarded-Initialv7-Run-2",
-  "source_name": "Unguarded-Initialv7-Run-2",
-  "metric": "val_loss",
-  "value": 0.5401946604251862,
-  "step": 700
-}

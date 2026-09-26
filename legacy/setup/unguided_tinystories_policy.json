@@ -1,5 +1,5 @@
 {
-  "recipe": "setup/english_tinystories_c256_l6_config.json",
+  "recipe": "legacy/setup/english_tinystories_c256_l6_config.json",
   "checkpoint_dir": "output/checkpoints/english_tinystories_c256_l6",
   "run_name": "english_tinystories_c256_l6",
   "max_steps": 50000,

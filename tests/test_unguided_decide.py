@@ -71,7 +71,7 @@ class DecideTests(unittest.TestCase):
                 "loss_spike_ratio": 2.0,
                 "early_stop_patience": 4,
                 "remix_if": {"cabinet_exact_match_below": 0.15, "after_steps": 50},
-                "recipe": "setup/chat_facts_v7_config.json",
+                "recipe": "legacy/setup/chat_facts_v7_config.json",
             },
         ))
         self.assertEqual(result.action, Decision.ABORT_REMIX)

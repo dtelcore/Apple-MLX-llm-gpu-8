@@ -30,7 +30,7 @@ from training.unguided.prober import TINYSTORIES_MAX_NEW_TOKENS, TINYSTORIES_PRO
 
 class ConfigPolicyTests(unittest.TestCase):
     def test_recipe_has_no_text_path(self):
-        recipe = json.loads((_ROOT / "setup" / "english_tinystories_c256_l6_config.json").read_text(encoding="utf-8"))
+        recipe = json.loads((_ROOT / "legacy" / "setup" / "english_tinystories_c256_l6_config.json").read_text(encoding="utf-8"))
         self.assertNotIn("path", recipe["dataset"])
         self.assertEqual(recipe["dataset"]["vocab_path"], "data/tinystories/vocab.json")
         self.assertEqual(recipe["dataset"]["token_dir"], "data/tinystories")
@@ -45,30 +45,21 @@ class ConfigPolicyTests(unittest.TestCase):
         self.assertTrue(dataset_uses_prebuilt_tokens(recipe["dataset"]))
         self.assertFalse(dataset_uses_prebuilt_tokens({"name": "chat_facts_v7", "path": "data/chat_facts_v7.jsonl"}))
 
-    def test_c512_recipe_keeps_data_and_widens_the_stream(self):
-        recipe = json.loads((_ROOT / "setup" / "english_tinystories_c512_l6_config.json").read_text(encoding="utf-8"))
-        narrow = json.loads((_ROOT / "setup" / "english_tinystories_c256_l6_config.json").read_text(encoding="utf-8"))
+    def test_archived_c512_file_is_the_wide_stream_smoke(self):
+        recipe = json.loads((_ROOT / "legacy" / "setup" / "english_tinystories_c512_l6_config.json").read_text(encoding="utf-8"))
+        narrow = json.loads((_ROOT / "legacy" / "setup" / "english_tinystories_c256_l6_config.json").read_text(encoding="utf-8"))
         self.assertEqual(recipe["dataset"]["vocab_path"], "data/tinystories_packed/vocab.json")
         self.assertEqual(recipe["dataset"]["token_dir"], "data/tinystories_packed")
         self.assertNotEqual(recipe["dataset"]["token_dir"], narrow["dataset"]["token_dir"])
-        self.assertEqual(recipe["dataset"]["combine"], narrow["dataset"]["combine"])
-        self.assertEqual(recipe["dataset"]["bpe_merges"], narrow["dataset"]["bpe_merges"])
-        self.assertEqual(recipe["model"]["embedding_dim"], 512)
-        self.assertEqual(recipe["model"]["num_layers"], 6)
-        self.assertEqual(recipe["model"]["num_heads"], 8)
-        self.assertEqual(recipe["model"]["embedding_dim"] % recipe["model"]["num_heads"], 0)
-        self.assertEqual(recipe["model"]["embedding_dim"] // recipe["model"]["num_heads"], 64)
-        self.assertEqual(recipe["model"]["max_len"], 256)
-        self.assertEqual(recipe["hyperparameters"]["batch_size"], 8)
-        self.assertEqual(recipe["hyperparameters"]["gradient_accumulation_steps"], 4)
-        self.assertEqual(recipe["hyperparameters"]["learning_rate"], 0.0012)
-        self.assertEqual(recipe["hyperparameters"]["weight_decay"], 0.02)
-        self.assertEqual(recipe["hyperparameters"]["warmup_steps"], 1000)
-        self.assertEqual(recipe["hyperparameters"]["min_lr_ratio"], 0.05)
-        self.assertTrue(dataset_uses_prebuilt_tokens(recipe["dataset"]))
+        self.assertEqual(recipe["model"]["embedding_dim"], 1024)
+        self.assertEqual(recipe["model"]["layer_strategy"], "stream")
+        self.assertEqual(recipe["model"]["embedding_dim"] // recipe["model"]["num_heads"], 128)
+        self.assertEqual(recipe["hyperparameters"]["batch_size"], 4)
+        self.assertEqual(recipe["hyperparameters"]["gradient_accumulation_steps"], 16)
+        self.assertEqual(recipe["hyperparameters"]["warmup_steps"], 600)
 
     def test_policy_budget(self):
-        policy = json.loads((_ROOT / "setup" / "unguided_tinystories_policy.json").read_text(encoding="utf-8"))
+        policy = json.loads((_ROOT / "legacy" / "setup" / "unguided_tinystories_policy.json").read_text(encoding="utf-8"))
         self.assertEqual(policy["probe_mode"], "tinystories")
         self.assertEqual(policy["max_steps"], 50000)
         self.assertEqual(policy["probe_every"], 2000)
@@ -76,6 +67,31 @@ class ConfigPolicyTests(unittest.TestCase):
         self.assertEqual(policy["max_wall_s"], 259200)
         self.assertGreaterEqual(policy["early_stop_patience"], 50000)
         self.assertEqual(probe_mode(policy), "tinystories")
+
+
+class V011RecipeTests(unittest.TestCase):
+    def test_c1024_recipe_uses_packed_stories(self):
+        recipe = json.loads((_ROOT / "setup" / "english_tinystories_c1024_l6_config.json").read_text(encoding="utf-8"))
+        policy = json.loads((_ROOT / "setup" / "unguided_tinystories_policy.json").read_text(encoding="utf-8"))
+        self.assertEqual(recipe["model"]["embedding_dim"], 1024)
+        self.assertEqual(recipe["model"]["num_layers"], 6)
+        self.assertEqual(recipe["model"]["num_heads"], 8)
+        self.assertEqual(recipe["model"]["max_len"], 256)
+        self.assertEqual(recipe["model"]["layer_strategy"], "stream")
+        self.assertTrue(recipe["model"]["residual_scale"])
+        self.assertEqual(recipe["dataset"]["vocab_path"], "data/tinystories_packed/vocab.json")
+        self.assertEqual(recipe["dataset"]["token_dir"], "data/tinystories_packed")
+        self.assertFalse(recipe["dataset"]["combine"])
+        self.assertEqual(recipe["hyperparameters"]["batch_size"], 4)
+        self.assertEqual(recipe["hyperparameters"]["gradient_accumulation_steps"], 16)
+        self.assertEqual(recipe["hyperparameters"]["learning_rate"], 0.0012)
+        self.assertEqual(recipe["hyperparameters"]["warmup_steps"], 600)
+        self.assertEqual(recipe["hyperparameters"]["min_lr_ratio"], 0.05)
+        self.assertTrue(dataset_uses_prebuilt_tokens(recipe["dataset"]))
+        self.assertEqual(policy["recipe"], "setup/english_tinystories_c1024_l6_config.json")
+        self.assertEqual(policy["max_steps"], 4000)
+        self.assertEqual(policy["probe_mode"], "tinystories")
+        self.assertEqual((_ROOT / "VERSION").read_text(encoding="utf-8").strip(), "0.1.1")
 
 
 class PromptAndDecideTests(unittest.TestCase):
@@ -192,8 +208,8 @@ class DryRunTests(unittest.TestCase):
         with redirect_stdout(buf):
             rc = unguided_trainer.main(
                 [
-                    "--config", str(_ROOT / "setup" / "english_tinystories_c256_l6_config.json"),
-                    "--policy", str(_ROOT / "setup" / "unguided_tinystories_policy.json"),
+                    "--config", str(_ROOT / "legacy" / "setup" / "english_tinystories_c256_l6_config.json"),
+                    "--policy", str(_ROOT / "legacy" / "setup" / "unguided_tinystories_policy.json"),
                     "--dry-run",
                 ]
             )

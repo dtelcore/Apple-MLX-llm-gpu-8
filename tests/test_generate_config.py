@@ -17,7 +17,7 @@ import generate_config as gc
 
 class GenerateConfigTests(unittest.TestCase):
     def setUp(self):
-        self.base = gc.load_recipe(_ROOT / "setup" / "chat_c256_l6_config.json")
+        self.base = gc.load_recipe(_ROOT / "legacy" / "setup" / "chat_c256_l6_config.json")
 
     def test_clone_widen_c(self):
         cfg = gc.apply_overrides(self.base, embedding_dim=384, num_heads=8, num_layers=8)
@@ -40,7 +40,7 @@ class GenerateConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "chat_c384_l8_config.json"
             code = gc.main([
-                "--from", str(_ROOT / "setup" / "chat_c256_l6_config.json"),
+                "--from", str(_ROOT / "legacy" / "setup" / "chat_c256_l6_config.json"),
                 "--embedding-dim", "384",
                 "--num-layers", "8",
                 "--batch-size", "4",
@@ -57,9 +57,9 @@ class GenerateConfigTests(unittest.TestCase):
 
     def test_cli_refuses_clobber_base(self):
         code = gc.main([
-            "--from", str(_ROOT / "setup" / "chat_c256_l6_config.json"),
+            "--from", str(_ROOT / "legacy" / "setup" / "chat_c256_l6_config.json"),
             "--no-prompt",
-            "--output", str(_ROOT / "setup" / "chat_c256_l6_config.json"),
+            "--output", str(_ROOT / "legacy" / "setup" / "chat_c256_l6_config.json"),
         ])
         self.assertEqual(code, 1)
 

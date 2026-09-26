@@ -1,12 +1,15 @@
 # py_calls.md — runnable entry points
 
-**Apple MLX (this tree, v0.1.0):** MacBook Air M3, 2 GB process cap. Start with
+**Apple MLX (this tree, v0.1.1):** MacBook Air M3, 2 GB process cap. Start with
 [`README.md`](README.md). Activate `venv/` then `python setup/2_test_workspace.py`.
 
-Phase 1 wiki-prose English and v10 fact+wiki mixes are no longer the active
-English path. Those configs, builders, and commands live under [`legacy/`](legacy/README_legacy.md).
-Active English recipe: `setup/english_tinystories_c256_l6_config.json` after
-`python tools/prepare_tinystories.py`. Product chat stays `chat_facts_v7`.
+Phase 1 wiki-prose English, v10 mixes, and the 0.1.0 TinyStories runs are no
+longer the active English path. Those configs and checkpoints live under
+[`legacy/`](legacy/README_legacy.md).
+Active English recipe: `setup/english_tinystories_c1024_l6_config.json` on
+`data/tinystories_packed/` after `python tools/prepare_tinystories.py` and
+`python tools/prepare_tinystories.py --pack-stories --skip-download --text-dir data/tinystories/text --vocab data/tinystories/vocab.json`.
+Product chat stays `chat_facts_v7`.
 
 Kepler GT 730 host-CLI notes remain below; device path is MLX, not PyCUDA.
 
@@ -92,7 +95,9 @@ v0.0.8: `App.py` (selector + `/chat` + `/weights`). Related trained follow-ups a
 
 v0.0.9: `unguided_trainer.py` + `unguided_prober.py` + `autotrainer_daemon.py` + `trainmon.py` (7862 / App **Train** tab). No stdin. Fresh BPE per harvest mix. Log monitor is host-only. Do not `--resume` v7 into a new mix.
 
-v0.1.0: dual brain. Product chat stays `chat_facts_v7`. Active English is TinyStories (`setup/english_tinystories_c256_l6_config.json`). Phase 1 / v10 commands are under `legacy/`.
+v0.1.0: dual brain. Product chat stays `chat_facts_v7`. TinyStories English starts. Phase 1 / v10 commands are under `legacy/`.
+
+v0.1.1: story-packed TinyStories. Active recipe `setup/english_tinystories_c1024_l6_config.json` on `data/tinystories_packed/`. The 0.1.0 checkpoints and setup JSON are under `legacy/`.
 
 ### Generate probes `(shared: probe)`
 
@@ -173,10 +178,12 @@ python train.py --tokenizer char --menu   # opt into character tokenizer
 python train.py --generate --models-dir output\checkpoints
 python train.py --compare-quarters --checkpoint output\checkpoints\BiggerTest256256
 
-# Active English (TinyStories). Do not --resume a cabinet BPE.
+# Active English (v0.1.1 story-packed TinyStories). Do not --resume a 0.1.0 checkpoint.
 python tools/prepare_tinystories.py
-python unguided_trainer.py --config setup/english_tinystories_c256_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
-python unguided_prober.py --checkpoint output/checkpoints/english_tinystories_c256_l6 --probe-mode tinystories --dry-run
+python tools/prepare_tinystories.py --pack-stories --skip-download --text-dir data/tinystories/text --vocab data/tinystories/vocab.json
+python setup/english_tinystories_c1024_l6/check_data.py
+python unguided_trainer.py --config setup/english_tinystories_c1024_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
+python unguided_prober.py --checkpoint output/checkpoints/english_tinystories_c1024_l6 --probe-mode tinystories --dry-run
 
 # Legacy Phase 2 / v10 (wrong corpus). See legacy/README_legacy.md.
 python legacy/v10_attempts/tools/build_english_phase2_mix.py
@@ -193,19 +200,19 @@ only — do not `--resume` v6/v7 into a new mix. Remix aborts and writes
 `output/runs/<name>/NEXT_MIX.json` plus `ABORT_REASON`.
 
 ```text
-python unguided_trainer.py --config setup/quicktest_config.json --policy setup/unguided_quicktest_policy.json --dry-run
-python unguided_trainer.py --config setup/quicktest_config.json --policy setup/unguided_quicktest_policy.json
-python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json --dry-run
-python unguided_trainer.py --config setup/chat_facts_v7_config.json --policy setup/unguided_v7_policy.json
+python unguided_trainer.py --config legacy/setup/quicktest_config.json --policy legacy/setup/unguided_quicktest_policy.json --dry-run
+python unguided_trainer.py --config legacy/setup/quicktest_config.json --policy legacy/setup/unguided_quicktest_policy.json
+python unguided_trainer.py --config legacy/setup/chat_facts_v7_config.json --policy legacy/setup/unguided_v7_policy.json --dry-run
+python unguided_trainer.py --config legacy/setup/chat_facts_v7_config.json --policy legacy/setup/unguided_v7_policy.json
 python unguided_trainer.py --config ... --policy ... --unguarded
-python unguided_trainer.py --config setup/english_tinystories_c256_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
+python unguided_trainer.py --config setup/english_tinystories_c1024_l6_config.json --policy setup/unguided_tinystories_policy.json --dry-run
 python unguided_trainer.py --config legacy/english_phase1/setup/english_phase1_config.json --policy legacy/english_phase1/setup/unguided_phase1_policy.json --name English-Phase1 --dry-run
 ```
 
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
 | `--config` | str | required | Recipe JSON (architecture + dataset). Defaults stay in the v7 recipe / autoscale, not a hardcoded B/LR. |
-| `--policy` | str | required | `setup/unguided_quicktest_policy.json`, `setup/unguided_v7_policy.json`, `setup/unguided_tinystories_policy.json` (`probe_mode=tinystories`). Legacy Phase 1 / v10 policies live under `legacy/`. |
+| `--policy` | str | required | `setup/unguided_tinystories_policy.json` (`probe_mode=tinystories`, v0.1.1). Older quicktest / v7 / Phase 1 / v10 policies live under `legacy/`. |
 | `--dry-run` | flag | off | Print plan + param estimate; **no Metal** |
 | `--unguarded` | flag | off | Skip quarantine on a declared next-mix only. Cannot skip NaN/spike abort, stdin, or cross-BPE resume. |
 | `--max-steps` | int | policy | Override |
@@ -233,7 +240,7 @@ prompts, and write the same markdown report. `--dry-run` selects prompts only.
 ```text
 python unguided_prober.py --name Unguarded-Initialv7-Run-2 --dry-run
 python unguided_prober.py --checkpoint output/checkpoints/Unguarded-Initialv7-Run-2 --n 50
-python unguided_prober.py --checkpoint output/checkpoints/english_tinystories_c256_l6 --probe-mode tinystories --dry-run
+python unguided_prober.py --checkpoint output/checkpoints/english_tinystories_c1024_l6 --probe-mode tinystories --dry-run
 ```
 
 | Flag | Type | Default | Notes |

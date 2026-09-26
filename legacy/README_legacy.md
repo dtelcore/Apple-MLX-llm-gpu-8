@@ -9,6 +9,9 @@ old checkpoints can still be scored. Default `tests/` discovery does not
 collect the files under `legacy/tests/`.
 
 `data/train.txt` stays in the project `data/` directory and is **not** the
-English corpus. Active English is TinyStories via
-`python tools/prepare_tinystories.py` and
-`setup/english_tinystories_c256_l6_config.json`.
+English corpus.
+
+The 0.1.0 TinyStories runs, their checkpoints, logs, and every setup JSON
+recipe now live here too (`legacy/output/`, `legacy/setup/`). `output/` and
+`setup/` are clear for a new recipe. The packed corpus stays at
+`data/tinystories_packed`.

@@ -25,8 +25,8 @@ class DryRunTests(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = unguided_trainer.main([
-                "--config", str(_ROOT / "setup" / "quicktest_config.json"),
-                "--policy", str(_ROOT / "setup" / "unguided_quicktest_policy.json"),
+                "--config", str(_ROOT / "legacy" / "setup" / "quicktest_config.json"),
+                "--policy", str(_ROOT / "legacy" / "setup" / "unguided_quicktest_policy.json"),
                 "--dry-run",
             ])
         self.assertEqual(rc, 0)
@@ -39,8 +39,8 @@ class DryRunTests(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = unguided_trainer.main([
-                "--config", str(_ROOT / "setup" / "chat_facts_v7_config.json"),
-                "--policy", str(_ROOT / "setup" / "unguided_v7_policy.json"),
+                "--config", str(_ROOT / "legacy" / "setup" / "chat_facts_v7_config.json"),
+                "--policy", str(_ROOT / "legacy" / "setup" / "unguided_v7_policy.json"),
                 "--dry-run",
             ])
         self.assertEqual(rc, 0)
@@ -57,8 +57,8 @@ class DryRunTests(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = unguided_trainer.main([
-                "--config", str(_ROOT / "setup" / "chat_facts_v7_config.json"),
-                "--policy", str(_ROOT / "setup" / "unguided_v7_policy.json"),
+                "--config", str(_ROOT / "legacy" / "setup" / "chat_facts_v7_config.json"),
+                "--policy", str(_ROOT / "legacy" / "setup" / "unguided_v7_policy.json"),
                 "--name", "unguided_v7_log1",
                 "--dry-run",
             ])
@@ -70,8 +70,8 @@ class DryRunTests(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = unguided_trainer.main([
-                "--config", str(_ROOT / "setup" / "chat_facts_v7_config.json"),
-                "--policy", str(_ROOT / "setup" / "unguided_v7_policy.json"),
+                "--config", str(_ROOT / "legacy" / "setup" / "chat_facts_v7_config.json"),
+                "--policy", str(_ROOT / "legacy" / "setup" / "unguided_v7_policy.json"),
                 "--run-name", "run_only",
                 "--checkpoint-dir", "output/checkpoints/ckpt_only",
                 "--dry-run",
@@ -85,8 +85,8 @@ class DryRunTests(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = unguided_trainer.main([
-                "--config", str(_ROOT / "setup" / "quicktest_config.json"),
-                "--policy", str(_ROOT / "setup" / "unguided_quicktest_policy.json"),
+                "--config", str(_ROOT / "legacy" / "setup" / "quicktest_config.json"),
+                "--policy", str(_ROOT / "legacy" / "setup" / "unguided_quicktest_policy.json"),
                 "--log-every", "1",
                 "--dry-run",
             ])
@@ -103,8 +103,8 @@ class DryRunTests(unittest.TestCase):
                 rc = autotrainer_daemon.main([
                     "--retrain-log", str(log),
                     "--status", str(status),
-                    "--policy", str(_ROOT / "setup" / "unguided_v7_policy.json"),
-                    "--recipe", str(_ROOT / "setup" / "chat_facts_v7_config.json"),
+                    "--policy", str(_ROOT / "legacy" / "setup" / "unguided_v7_policy.json"),
+                    "--recipe", str(_ROOT / "legacy" / "setup" / "chat_facts_v7_config.json"),
                     "--once",
                     "--dry-run",
                 ])
@@ -137,8 +137,8 @@ class DryRunTests(unittest.TestCase):
     def test_dry_run_does_not_import_mlx(self):
         with mock.patch.dict(sys.modules, {"mlx": None, "mlx.core": None}):
             rc = unguided_trainer.main([
-                "--config", str(_ROOT / "setup" / "chat_facts_v7_config.json"),
-                "--policy", str(_ROOT / "setup" / "unguided_v7_policy.json"),
+                "--config", str(_ROOT / "legacy" / "setup" / "chat_facts_v7_config.json"),
+                "--policy", str(_ROOT / "legacy" / "setup" / "unguided_v7_policy.json"),
                 "--dry-run",
             ])
         self.assertEqual(rc, 0)

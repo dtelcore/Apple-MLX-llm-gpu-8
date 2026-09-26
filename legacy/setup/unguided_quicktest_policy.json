@@ -1,5 +1,5 @@
 {
-  "recipe": "setup/quicktest_config.json",
+  "recipe": "legacy/setup/quicktest_config.json",
   "checkpoint_dir": "output/checkpoints/unguided_quicktest",
   "run_name": "unguided_quicktest",
   "max_steps": 8,

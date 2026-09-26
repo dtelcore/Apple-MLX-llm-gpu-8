@@ -6,11 +6,11 @@
 #   setup/english_tinystories_c512_l6/train.sh --resume   # add 50000 to this run
 #   setup/english_tinystories_c512_l6/train.sh --resume 100000
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$ROOT"
 
 CKPT="output/checkpoints/english_tinystories_c512_l6"
-CONFIG="setup/english_tinystories_c512_l6_config.json"
+CONFIG="legacy/setup/english_tinystories_c512_l6_config.json"
 RESUME=0
 if [[ "${1:-}" == "--resume" ]]; then
   RESUME=1
@@ -18,7 +18,7 @@ if [[ "${1:-}" == "--resume" ]]; then
 fi
 STEPS="${1:-50000}"
 
-python setup/english_tinystories_c512_l6/check_data.py
+python legacy/setup/english_tinystories_c512_l6/check_data.py
 
 if [[ "$RESUME" -eq 0 && -f "$CKPT/weights.npz" ]]; then
   echo "Refusing a fresh start: $CKPT/weights.npz already exists." >&2

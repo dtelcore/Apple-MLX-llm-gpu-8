@@ -161,7 +161,7 @@ def decide(ctx: DecideContext) -> DecideResult:
                 "python",
                 "tools/make_fact_mix.py",
                 "--config",
-                p.get("recipe", "setup/chat_facts_v7_config.json"),
+                p.get("recipe", "legacy/setup/chat_facts_v7_config.json"),
             ],
         }
         return DecideResult(

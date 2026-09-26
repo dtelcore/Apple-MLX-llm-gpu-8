@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from paths import DATA_DIR, OUTPUT_ROOT, PROJECT_ROOT, SETUP_DIR
+from paths import DATA_DIR, OUTPUT_ROOT, PROJECT_ROOT
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -53,7 +53,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("llm_gpu.autotrainer_daemon")
 
-DEFAULT_MANIFEST = SETUP_DIR / "autotrainer_config.json"
+DEFAULT_MANIFEST = PROJECT_ROOT / "legacy" / "setup" / "autotrainer_config.json"
 
 
 def _load_json(path: Path) -> dict:
@@ -91,8 +91,8 @@ def main(argv: list[str] | None = None) -> int:
 
     retrain_log = Path(args.retrain_log or manifest.get("retrain_log") or OUTPUT_ROOT / "cabinet_retrain.jsonl")
     status_path = Path(args.status or manifest.get("status") or OUTPUT_ROOT / "autotrainer_status.json")
-    policy_path = Path(args.policy or manifest.get("policy") or SETUP_DIR / "unguided_v7_policy.json")
-    recipe_path = Path(args.recipe or manifest.get("recipe") or SETUP_DIR / "chat_facts_v7_config.json")
+    policy_path = Path(args.policy or manifest.get("policy") or PROJECT_ROOT / "legacy" / "setup" / "unguided_v7_policy.json")
+    recipe_path = Path(args.recipe or manifest.get("recipe") or PROJECT_ROOT / "legacy" / "setup" / "chat_facts_v7_config.json")
     holder_path = Path(manifest.get("metal_holder") or OUTPUT_ROOT / "metal_holder.json")
     if args.state:
         state_path = Path(args.state)
