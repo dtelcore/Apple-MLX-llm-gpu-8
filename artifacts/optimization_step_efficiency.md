@@ -7,7 +7,37 @@ Two different clocks:
 1. **Step time** — wall-clock for one optimizer step (all micro-batches, clip, AdamW).
 2. **Steps to quality** — how many of those steps you need before val loss / generation is useful.
 
-A change that cuts milliseconds by running a smaller update often increases the step count. Gradient accumulation is the clearest example already written down in `guide.md`.
+A change that cuts milliseconds by running a smaller update often increases the step count. Gradient accumulation is the clearest example already written down in `guide.md`. The 2000-step c512 run below is the case where that trade was taken on purpose, and the early quality result favors the harder step.
+
+## Update: 2000-step c512 hardness result
+
+The JSON/README disagreement is the hardness search for a **2000-step** budget, not a stale file to revert. The README still describes the long pass (accum 4, warmup 1000, 8192 tokens/step, ≈188,444 optimizer steps per epoch). The short run is testing fewer, heavier updates.
+
+Reported result (not a log checked into this tree): at C=512, **batch 4, accum 16**, 2000 optimizer steps are reaching the same gains that previously took about **400,000 steps, one full epoch**, and misses are still there.
+
+What that hardness is, in this trainer:
+
+| Recipe | Micro-batch | Accum | Sequences / step | Tokens / step (T=256) | Estimator |
+|---|---:|---:|---:|---:|---|
+| Light epoch (c256 JSON: B=4, accum=4) | 4 | 4 | 16 | 4,096 | ~531 MB, resident |
+| README long c512 pass | 8 | 4 | 32 | 8,192 | ~1711 MB, resident, little slack |
+| **2000-step run as described** | **4** | **16** | **64** | **16,384** | **~1107 MB, resident, fits easily** |
+| File on disk today (`english_tinystories_c512_l6_config.json`) | 8 | 16 | 128 | 32,768 | ~1711 MB, resident, ~30 MB under the usable cap |
+
+`train.sh` does not pass `--batch-size` or `--grad-accum`. The next launch from that script uses **batch 8, accum 16**, which is a heavier step than the batch-4 run just described (twice the micro-batch work, twice the tokens per step, and close to the 2 GB planner edge).
+
+Epoch arithmetic, using the README’s ≈188,444 steps at effective batch 32 over the same stride-128 windows:
+
+- Windows in one pass ≈ 188,444 × 32 ≈ 6.03 million.
+- Light effective batch 16 (c256): one pass ≈ 188,444 × 32 / 16 ≈ **377,000** optimizer steps. The “~400,000 steps, one epoch” figure sits on that lighter step.
+- Batch 4 × accum 16 is effective batch 64: one pass ≈ 188,444 × 32 / 64 ≈ **94,000** optimizer steps.
+- 2000 hard steps are about **2% of one pass** (2000 / 94,000) and about **32.8 million** token-presentations (2000 × 64 × 256). The full light epoch presents on the order of 1.5 billion (377,000 × 16 × 256).
+
+So the quality match is not “we saw the corpus sooner.” It is “a wider net and a 4× larger token batch moved the probe as far in 2% of a pass as the light step did in a full pass.” Misses remaining means the 2000-step point is a checkpoint on that curve, not a finished model.
+
+Wall-clock, using `guide.md` scaling and not a timed M3 log: doubling C is ~4× the block GEMMs, and accum 16 vs accum 4 is 4× the micro-batches, at the same micro-batch of 4. One hard step is on the order of **16×** one c256 step if the step is GEMM-bound. 2000 × 16 ≈ 32,000 light-step-equivalents, against ~377,000–400,000 light steps. That is about a **12×** shorter path to the same probe **if** the scaling holds and the samples really match. Fanless throttle (`README.md`) can eat part of that.
+
+Schedule on a 2000-step budget with the JSON knobs (`warmup_steps` 600, `min_lr_ratio` 0.05, base 1.2e-3): the first 600 steps are still warmup (30% of the run below peak LR), then cosine over the remaining 1400 steps down to 6e-5. If `--steps 2000` is the cosine length, step 2000 is already at the floor. Extending that same process past 2000 without resetting `total_steps` keeps training at the floor. A longer hard-step run wants `--steps` (or `--run-budget`) set to the real length so the cosine is stretched, with warmup kept a small fraction of that length.
 
 ---
 
@@ -120,15 +150,15 @@ Already in decent shape for step time, so not the first place to “optimize” 
 
 ### What wastes steps (progress per update)
 
-1. **c512 recipe disagrees with itself, so a 50k-step run is not the run the README describes.** `setup/english_tinystories_c512_l6_config.json` has `gradient_accumulation_steps: 16` and `warmup_steps: 600`. The README and the JSON `metadata.description` say accum **4**, warmup **1000**, **8192** tokens/step, one pass ≈ **188,444** optimizer steps. `train.sh` does not pass `--grad-accum` or `--warmup-steps`. The trainer reads the JSON fields. Live tokens/step = `8 × 16 × 256 = 32768`, four times the documented 8192. Step time scales about 4×. Steps to see the corpus once drop about 4× (188k → ~47k). A `train.sh` 50k chunk is a bit more than one pass at the JSON accum, and about 27% of a pass at the README accum. Fix the mismatch before judging either clock.
-2. **Cosine is tied to `total_steps`, and warmup is a large slice of short runs.** `AdamWGPU.current_lr`: linear warmup, then cosine down to `min_lr_ratio × base` (presets **0.1**, c512 JSON **0.05**). `guide.md` pitfall: the old recipe was flat `1e-5`. A 2000-step smoke with warmup 1000 spends half the run below the base LR, then decays. c256 policy `max_steps` is 50000 with warmup 1000, which is a reasonable fraction; a smoke that reuses that warmup is not.
+1. **The c512 files describe two different experiments.** The README and the JSON `metadata.description` are the long pass: accum 4, warmup 1000, 8192 tokens/step, ≈188,444 steps per epoch. The hyperparameters block is the short-budget hardness search: accum **16**, warmup **600**, and (on disk) batch **8**. The 2000-step result that matches a ~400k-step epoch was **batch 4, accum 16**. Those are not the same step. `train.sh` reads the file, so the next scripted launch is batch 8 unless `--batch-size 4` is passed. Keep the README as the epoch baseline; write the winning short-run tuple into the hyperparameters when that search is done, so a later 2000-step launch cannot silently become 32,768 tokens/step.
+2. **Cosine is tied to `total_steps`.** `AdamWGPU.current_lr`: linear warmup, then cosine down to `min_lr_ratio × base` (presets **0.1**, c512 JSON **0.05**). On a 2000-step run, warmup 600 then a decay to 6e-5 is the hardness schedule. The waste appears only if that process is continued past 2000 while `total_steps` stays 2000: the extra steps sit on the floor. A 4k or 8k hard-step follow-up should set `--steps` to that new length. Flat `1e-5` is still the documented bad schedule (`guide.md`).
 3. **Unguided TinyStories will not stop early.** `setup/unguided_tinystories_policy.json`: `max_steps` 50000, `early_stop_patience` **100000**. `decide()` stops after that many evals without a new best val (`training/unguided/decide.py`; default in code is 4, the policy overrides it). 50k steps / `eval_every` 500 = 100 evals, so patience never fires. You always pay the full budget. `loss_spike_ratio` 2.0 can **abort** the run instead.
 4. **Unguided overhead between steps.** Every 500 steps: full weight download + checkpoint + up to 8 val forwards. Every 2000 steps: generate probe (`probe_every`). `make_train_args` also sets `--checkpoint-every` to `eval_every`, but `train_segment` does not call `run_probe` (the disk reload). The save itself is still on the segment boundary. Quicktest policy `eval_every` is **4** (`setup/unguided_quicktest_policy.json`) — fine for a smoke, bad if copied onto a real run.
 5. **Resume throws away Adam moments.** `train.py` prints that `m`/`v` start at zero while `t` continues, and that early loss/grad spikes are expected. c512 README says leave `--reset-lr-schedule` off. Each resume pays a noisy stretch of steps. Checkpoints do not store moments (“intentional … to conserve memory”).
 6. **Window overlap and cross-document cuts.** Stride 64 on T=128 and stride 128 on T=256 keep **50% overlap**. `guide.md`: stride 1 is the old “slow epoch” (more windows, more correlated updates). Stories are joined with spaces (`tokenizer/bpe.py` `encode_corpus`: “joined by single spaces”) and then cut into windows with no boundary token and no loss mask (`training/dataset.py`). Windows train on the seam between stories. That spends gradient on a transition the model should not learn. It is still the right call versus stride 1; it is not document packing.
 7. **Chat objective.** `guide.md`: “Training loss is still next-token on the sliding window (User: tokens are not masked); packing-and-masking assistant-only loss would need a different example layout.” Cabinet quality is dominated by the **mix and the repeat count**, not by the optimizer: `CHANGELOG.md` 0.0.6 — ~300 repeats of a few dozen Q&As recite; 20 repeats of a 300-topic slice in 300 steps does not. `README.md`: dirty multi-answer mixes fail; fair one-answer mixes stick; do not `--resume` across vocab, arch, or mix.
 8. **Clip and weight decay are fixed, not searched.** Every recipe uses global clip **1.0**, betas 0.9/0.999. Weight decay is 0.01 on story presets and c256, **0.02** on c512. No other optimizer exists. Dropout cannot regularize. Host and GPU Adam both decay the **post-update** weight (`params -= update; params -= lr*wd*params`). At these LRs that is a tiny departure from textbook decoupled AdamW and it matches between the two implementations. Not a step-count lever.
-9. **Effective batch is small in tokens except c512-as-JSON.** Preset 3: 4×4×128 = **2048** tokens/step. c256: 4×4×256 = **4096** (metadata: “50k steps is ~200M tokens” — 50000×4096 = 204.8M). Sub1m: 8×2×128 = **2048**. c512 JSON: **32768** tokens/step. For a 6-layer model, 2k–4k tokens/step is a noisy update; the repo chose that on purpose to stay inside VRAM (`guide.md`). Raising accum buys a quieter update and a slower step, one for one.
+9. **The light recipes are noisy updates; the 2000-step c512 run is the large one.** Preset 3: 4×4×128 = **2048** tokens/step. c256: 4×4×256 = **4096**. Sub1m: 8×2×128 = **2048**. The reported c512 test: 4×16×256 = **16,384**. The file on disk at batch 8 is **32,768**. The early probe says 16,384-token steps at C=512 moved quality as far in 2000 steps as ~400k steps of the 4,096-token recipe. That is the steps-to-quality result. It does not make the hard step cheap: accum still multiplies wall-clock per step (`guide.md`).
 10. **`num_epochs` counts micro-batches.** `train.py`: if `--steps` is omitted, `total_steps = epochs * dataset.num_batches()`, and `num_batches` is windows/`batch_size`, not windows/`(batch×accum)`. The loop increments `global_step` only on optimizer steps, and each of those consumes `grad_accum` micro-batches. An “epoch” therefore walks the data about `grad_accum` times. The English scripts pass `--steps`, so they are not hit. A wizard run that answers in epochs is.
 
 ---
@@ -143,20 +173,20 @@ Impact ratings are relative to a **resident** c256/c512 step with metrics off. �
 - **Connects:** `README.md` knobs list, `CHANGELOG.md` 0.0.4–0.0.5, `--no-layer-stream`, `--no-grad-checkpoint`, `--no-autoscale`.
 - **Step time:** High if a run is silently streaming or checkpointing (documented 2–4× for stream; checkpoint adds a second attn/MLP forward per layer). None if the line already says “no changes”.
 - **Steps to quality:** Unchanged when the math matches (checkpoint parity test). Shrink-T **does** change the task.
-- **Confidence:** High on the cost of stream. Medium on whether a real c512 start still fits — the estimator is ~30 MB under the usable cap with a rough parameter count.
+- **Confidence:** High on the cost of stream. The batch-4 accum-16 c512 estimate is ~1107 MB and fits. The on-disk batch-8 estimate is ~1711 MB of 1741 MB usable, so that variant is the one that can still flip to checkpoint or stream.
 - **Effort:** Config / flag. No code.
 - **Risk:** `--no-autoscale` or `--no-layer-stream` refuses or cuts T instead of streaming.
 - **Present:** Yes.
 
-### 2. Resolve c512 accum and warmup before any long run
+### 2. Keep the hard 2000-step recipe, and name it separately from the epoch baseline
 
-- **What:** Make JSON, metadata, and `setup/english_tinystories_c512_l6/README.md` name the same accum and warmup. JSON is what `train.sh` runs: accum **16**, warmup **600**. Docs say accum **4**, warmup **1000**, 8192 tokens/step.
-- **Step time:** Choosing 4 instead of 16 is about a **4×** shorter optimizer step. tok/s stays in the same band (`guide.md`). Choosing 16 spends 4× the GPU time per logged step and covers the corpus in ~4× fewer steps.
-- **Steps to quality:** 32768 tokens/step should be a cleaner gradient than 8192, so loss per step should move more, at 4× the seconds. Which one reaches a useful probe sooner in wall-clock is not measured here.
-- **Confidence:** High that the files disagree and that the JSON wins. Medium on which token batch is the better quality/time tradeoff.
-- **Effort:** One config edit once you pick a side. Confirm with the `[memory]` line (accum does not change the byte estimate).
-- **Risk:** If you only change the README, the run will not match it.
-- **Present:** The disagreement is present. A single source of truth is not.
+- **What:** The quality result supports fewer, heavier steps: C=512, batch 4, accum 16, 2000 steps, warmup 600, base LR 1.2e-3, `min_lr_ratio` 0.05. The README’s accum 4 / 8192-token / ~188k-step pass is the baseline that took ~400k light steps to a similar probe. When the search is finished, put batch 4 (not the on-disk batch 8) in the hyperparameters and leave the README numbers labeled as the long pass.
+- **Step time:** A hard step is slower. Versus c256 (accum 4, C=256, same micro-batch 4) the guide’s scaling is about 4× from width and 4× from accum, ~16× per optimizer step, GEMM-bound, unmeasured on this Air. Versus the on-disk batch-8 config, batch 4 is about half the micro-batch work and ~1107 MB instead of ~1711 MB, so it stays resident with room.
+- **Steps to quality:** This is the lever that just moved. 2000 hard steps ≈ 2% of a pass and matched a full light epoch, with misses left. The next quality experiment is more steps at this same hardness (stretch the cosine), or one more hardness bump to batch 8 / 32,768 tokens/step, which is already what `train.sh` will do if batch is left at 8.
+- **Confidence:** High on the token counts and on the file still saying batch 8. The quality match is the run report; this tree has no probe log for it. Medium on the ~12× wall-clock estimate (guide scaling × 2000 vs ~400k).
+- **Effort:** Flags or one config edit. No optimizer code.
+- **Risk:** Launching `train.sh` and comparing it to the batch-4 result. Continuing past 2000 on a cosine that already hit 6e-5.
+- **Present:** Accum 16, warmup 600, and LR 1.2e-3 are in the JSON. Batch 4 is the reported run, not the committed `batch_size`.
 
 ### 3. `mx.compile` on a closed resident step
 
@@ -271,7 +301,7 @@ Impact ratings are relative to a **resident** c256/c512 step with metrics off. �
 ### 13. Anything else the benches and plans already name
 
 - **Thermal.** Port plan and `README.md`: fanless Air, lid open, a one-step bench will not hold for hours. This caps how much “ms/step” you can buy back with kernels once the chip is throttling.
-- **Headroom vs batch.** Default 15% is ~307 MB left unused so compile/scratch fit. Compile is unused. Lowering `--memory-headroom` only changes a run that is **failing** the fit check. c256 already fits at 531 MB, so headroom does not unlock a bigger batch there. c512’s estimate sits on the usable edge, so headroom **can** be the difference between resident and autoscale.
+- **Headroom vs batch.** Default 15% is ~307 MB left unused so compile/scratch fit. Compile is unused. Lowering `--memory-headroom` only changes a run that is **failing** the fit check. c256 (~531 MB) and the reported c512 batch-4 step (~1107 MB) already fit. The on-disk batch-8 c512 estimate sits on the usable edge, so headroom can be the difference between resident and autoscale for that variant only.
 - **`add_block` in `ops.py`** round-trips through the host. Nothing in `model/` calls it. Dead on the train path.
 - **Epoch accounting** (section B.10) inflates work when the wizard uses epochs with accum > 1.
 - **Second model on every `run_probe`.** Easy to miss in a profile of “the step” because it sits after the step, inside the checkpoint branch.
@@ -282,14 +312,12 @@ Impact ratings are relative to a **resident** c256/c512 step with metrics off. �
 
 ### Quick wins on step time
 
-Do these before any kernel work. They use flags and the `[memory]` line.
+The hard step is supposed to be slow. These keep it from getting slower than the batch-4 accum-16 run, and they make each of those 16 micro-batches cheaper once you touch code.
 
-1. **Confirm the run is resident and not checkpointing.** `[memory] … ckpt=0 fp16=0 eval_per_layer=0 layers=resident`. If c512 flips to `ckpt=1` or `stream`, that dominates everything below. c256’s estimator already fits (~531 MB).
-2. **Pick c512 accum on purpose.** JSON 16 vs README 4 is a ~4× step-time choice and does not change the byte estimate. Align the JSON with the choice so `train.sh` and the docs match.
-3. **Leave metrics, traces, and val off for throughput.** `--no-layer-grads` if you log often. c512’s `--log-every 25` is fine; unguided `log_every` 10 is fine because that logger does not sync. Do not copy `unguided_quicktest_policy.json`’s `eval_every: 4` onto a long run.
-4. **Amortize saves.** `train.sh` already uses `--checkpoint-every 10000`. Know that each of those still reloads the checkpoint (`run_probe`). Unguided saves every `eval_every` (500) via `sync_host_weights`; that is the steady tax on that kernel.
-5. **Do not turn on `--grad-checkpoint`, `--layer-stream`, or fp16 storage to “go faster”.** The repo already marks the first as recompute, the second as 2–4× fewer tok/s, and fp16 as storage with FP32 math.
-6. **Only then measure.** `bench_step.py` on the toy net, then one real shape with metrics off. `bench_profile.py` will not explain `AdamWGPU`. `bench_mlp_fusion.py` will not justify a fused MLP until `fused_mlp_row` is actually one kernel.
+1. **Stay on the batch-4 step that just matched the epoch probe.** Estimator ~1107 MB, resident. The file’s batch 8 is a different, tighter step (~1711 MB). Confirm `[memory] … ckpt=0 fp16=0 layers=resident` on whichever one you launch.
+2. **Leave metrics, traces, and val off while comparing hardness.** `--no-layer-grads` if you log often. A 2000-step run that checkpoints every 1000 and reloads via `run_probe` spends a real fraction of its wall-clock outside the optimizer step. For this comparison, checkpoint at the end (or once).
+3. **Do not turn on `--grad-checkpoint`, `--layer-stream`, or fp16 storage to “go faster”.** Stream is the documented 2–4× tok/s hit. Checkpoint recomputes every micro-batch, and a hard step has 16 of them.
+4. **Kernel work pays 16× on this recipe.** Gating the per-layer `eval_for_host`, caching RoPE and the causal mask, then `mx.compile` of one resident micro-batch, each cut time inside every accum slice. Do that after the hardness comparison is stable. `bench_profile.py` still times host Adam. `bench_mlp_fusion.py` still compares two unfused paths.
 
 Code experiments, after the flags, in this order:
 
@@ -302,19 +330,19 @@ Leave `mx.fast` / AMP / a second optimizer until the project is willing to drop 
 
 ### Fewer steps to quality
 
-Separate list. Several of these **increase** step time.
+The 2000-step result is this list’s first item. The rest is how to spend the misses that are still there.
 
-1. **Fix the c512 token batch in the JSON** so “50k steps” means the curriculum you think it means (one pass ≈ 188k steps only at effective batch 32). Then judge probes against that pass, not against a 4× different one.
-2. **Match warmup and cosine to the budget you will finish.** Base LRs already in the presets (3e-4 / 5e-4) or the English configs (9e-4 / 1.2e-3). Avoid flat `1e-5`. Avoid warmup 1000 on a 2000-step smoke. Watch the cosine floor (`min_lr_ratio` 0.1 or 0.05): the tail of a 50k run is intentionally slow.
-3. **Let unguided stop.** Set `early_stop_patience` to a small number of **post-warmup** evals (the code default is 4). As written, 100000 means the 50k cap is the only stop. Do not count the evals that fall inside `warmup_steps`.
-4. **Raise tokens per step on shapes that still fit resident** if val loss is noisy. c256 has estimator headroom to grow B (better tok/s and a quieter grad) or accum (quieter grad, slower step). c512 JSON is already the large-batch end.
-5. **Stop resuming as if moments were intact.** A long continue after `--resume` spends steps refilling `m`/`v`. Either accept a short noisy region or plan a fresh run when the budget is large. Saving moments would remove that, and the checkpoint comment says they were omitted to save memory.
-6. **Data, for the objective you actually score.** Stories: a separator between documents is the packing gap; stride 128 is already the anti-waste setting versus stride 1. Chat/cabinet: repeats and a single answer per question (`CHANGELOG.md` 0.0.6), not a new optimizer. Assistant-only loss is the documented next objective change, and it needs a new example layout.
-7. **Use probes as a stop, not only a log.** `probe_every` 2000 already runs. `decide_next_step` can say extra steps are optional; the loop still continues until `max_steps` or patience. Wire a stop to that verdict only after you trust the probe (the same file warns that a teacher-forced 0.0 must not abort a model that already generates).
+1. **Stay with harder steps.** C=512, batch 4, accum 16, 16,384 tokens/step, got epoch-level gains by step 2000 (~2% of a pass). Going back to accum 4 / ~400k light steps is the path that already plateaued at “reasonable, with misses.”
+2. **Next run: more steps at the same hardness, with the cosine stretched.** Try 4,000 or 8,000 at batch 4, accum 16, and set `--steps` to that number so warmup stays ~600 (or ~10% of the new budget) and `min_lr_ratio` 0.05 is only reached at the end. Do not resume the 2000-step process with the old `total_steps`: LR is already at 6e-5, and resume also zeros Adam moments.
+3. **One hardness bump, as a separate A/B, not as a silent `train.sh` default.** Batch 8, accum 16 is 32,768 tokens/step and ~1711 MB. It is the file on disk. Run it only labeled as “harder than the 2000-step winner,” and check the `[memory]` line for `ckpt=0` and `layers=resident`. If autoscale turns on checkpointing, the extra recompute lands on all 16 micro-batches and the comparison is no longer the same update.
+4. **Write the winner down** when you stop searching: hyperparameters `batch_size` 4, `gradient_accumulation_steps` 16, `warmup_steps` 600, and a metadata line that the README’s 8192-token / ~188k-step numbers are the old epoch baseline.
+5. **Misses that survive a few thousand hard steps** are the data/objective gaps in section C.11 (story seams, no loss mask), not a reason to return to a 4,096-token step. Stride 128 is already the less-wasteful window setting.
+6. **Unguided 50k with patience 100000** is a different policy. It will not notice that quality arrived at step 2000. For this recipe, stop on the probe, or set patience in post-warmup evals. The code default is 4 evals; the TinyStories policy overrides it.
 
 ### What not to do first
 
 - Retuning betas, inventing Lion, or turning on dropout in JSON. Dropout does nothing on GPU. There is no second optimizer.
 - Expecting `bench_mlp_fusion.py` or `graph.py` to speed up the current step. Both describe work that was not carried onto MLX.
+- Reverting accum to 4 to “match the README.” That is the ~400k-step epoch the 2000-step run is already beating on probes.
 - Shrinking T or enabling stream to improve the loss curve. Those cut (or slow) the step without a better update.
 - Reading the GT 730 **790 ms** figure as an M3 baseline. It is the only millisecond anchor in the repo, and `guide.md` labels the card.
