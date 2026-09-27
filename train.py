@@ -423,7 +423,7 @@ def _handle_quarterly_milestone(
 
     generated = ""
     if do_generate_probe:
-        full_tracer = make_full_tracer()
+        full_tracer = None if cli_common.traces_disabled(args) else make_full_tracer()
         generated = run_generate_probe(
             model,
             tokenizer,
@@ -822,6 +822,7 @@ def train(args: argparse.Namespace) -> str:
     quarterly_steps = set(milestone_fracs.keys())
     quarterly_done: set[int] = {s for s in quarterly_steps if s <= start_step}
     do_generate_probe = not getattr(args, "no_generate_probe", False)
+    no_traces = cli_common.traces_disabled(args)
     if quarterly_steps:
         pending = sorted(quarterly_steps - quarterly_done)
         print(
@@ -837,7 +838,11 @@ def train(args: argparse.Namespace) -> str:
             print(f"  (skipping already-passed milestones: {', '.join(f'{s:,}' for s in sorted(quarterly_done))})")
         if pending:
             print(f"  (pending: {', '.join(f'{s:,}' for s in pending)})")
-        if not do_generate_probe:
+        if no_traces and not do_generate_probe:
+            print("  (traces disabled via --no-traces; generate probes disabled via --no-generate-probe; still saving quarters + val)")
+        elif no_traces:
+            print("  (traces disabled via --no-traces, including quarterly dumps; generate probes still run)")
+        elif not do_generate_probe:
             print("  (generate probes disabled via --no-generate-probe; still saving quarters + val/traces)")
 
     print("=" * 70)
@@ -885,7 +890,7 @@ def train(args: argparse.Namespace) -> str:
             and next_step not in quarterly_done
         )
         trace_snapshot = None
-        if is_quarter:
+        if is_quarter and not no_traces:
             # Force full traces on the training forward for this milestone step.
             trace_snapshot = _force_quarter_traces(tracer)
         else:

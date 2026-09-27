@@ -1,5 +1,26 @@
 # Apple MLX GPT (M3 Air)
 
+# wallclock , batch and accum timing incl mem
+
+
+|                    |                |                     |                     |                        |                      |                            |
+| ------------------ | -------------- | ------------------- | ------------------- | ---------------------- | -------------------- | -------------------------- |
+| **Physical Batch** | **Grad Accum** | **Effective Batch** | **Steps per Epoch** | **Est. Time per Step** | **Est. Total Hours** | **Est. VRAM (with GC)**    |
+| 1                  | 1              | 1                   | 4,968,387           | ~0.085s (85ms)         | 117.8                | ~406 MB                    |
+| 2                  | 2              | 4                   | 1,242,097           | ~0.341s (341ms)        | 117.8                | ~462 MB                    |
+| 4                  | 4              | 16                  | 310,524             | ~1.365s                | 117.8                | ~574 MB                    |
+| 8                  | 8              | 64                  | 77,631              | ~5.461s                | 117.8                | ~798 MB                    |
+| **16**             | **1**          | **16**              | **310,524**         | **~1.365s**            | **117.8**            | **~1.25 GB** *(Your Log)*  |
+| 16                 | 4              | 64                  | 77,631              | ~5.461s                | 117.8                | ~1.25 GB                   |
+| 16                 | 16             | 256                 | 19,407              | ~21.84s                | 117.8                | ~1.25 GB                   |
+| 16                 | 32             | 512                 | 9,703               | ~43.69s                | 117.8                | ~1.25 GB                   |
+| **24**             | **1**          | **24**              | **207,016**         | **~2.048s**            | **117.8**            | **~1.69 GB** *(Safe Max)*  |
+| 24                 | 32             | 768                 | 6,469               | ~65.53s                | 117.8                | ~1.69 GB                   |
+| **32**             | **1**          | **32**              | **155,262**         | **~2.731s**            | **117.8**            | **~2.14 GB ⚠️ (OOM Risk)** |
+| 32                 | 16             | 512                 | 9,703               | ~43.69s                | 117.8                | ~2.14 GB ⚠️                |
+| 32                 | 32             | 1024                | 4,851               | ~87.39s                | 117.8                | ~2.14 GB ⚠️                |
+
+
 From-scratch inspectable GPT on MacBook Air M3 (8 GB unified memory). Host-side
 CLI / tokenizer / NumPy reference come from [llm-gpu-8](https://github.com/dtelcore/llm-gpu-8);
 the device layer is MLX ops + explicit VJPs (no autograd).
@@ -11,27 +32,27 @@ brain. **v0.0.9** — unguided trainer + autotrainer daemon. **v0.0.8** — **Ap
 English generate → Wikipedia). **2 GB** process budget (hardcoded). Soft machine
 guard: **5.5 GB**. Fact pipelines are from 0.0.6; layer streaming is from 0.0.5.
 
-
 ## Where this sits
 
 Two brains, one Python router. This is an **instrumented research GPT**, not a
 black-box mini ChatGPT. Hand VJPs and a hardcoded **2 GB** Metal budget stay.
 
-| | **Fact brain** | **English brain** | **Router** |
-|---|---|---|---|
-| Role | Frozen recitation cabinet | Open English (TinyStories) | Python, inspectable |
-| Checkpoint | `chat_facts_v7` / v9 | `english_tinystories_c1024_l6` | — |
-| Shape | C=512 · L=16 · T=512 | C=1024 · L=6 · T=256, stream | — |
-| Vocab | Cabinet BPE (~4k) | TinyStories BPE plus end-of-story token (6103) | — |
-| Objective | Exact `User:` → stored answer | Coherent multi-sentence text | cabinet → calc → English → wiki/tools |
-| Status | Product; do not train more v7 | Active learning path | Unchanged kernel |
+
+|            | **Fact brain**                | **English brain**                              | **Router**                            |
+| ---------- | ----------------------------- | ---------------------------------------------- | ------------------------------------- |
+| Role       | Frozen recitation cabinet     | Open English (TinyStories)                     | Python, inspectable                   |
+| Checkpoint | `chat_facts_v7` / v9          | `english_tinystories_c1024_l6`                 | —                                     |
+| Shape      | C=512 · L=16 · T=512          | C=1024 · L=6 · T=256, stream                   | —                                     |
+| Vocab      | Cabinet BPE (~4k)             | TinyStories BPE plus end-of-story token (6103) | —                                     |
+| Objective  | Exact `User:` → stored answer | Coherent multi-sentence text                   | cabinet → calc → English → wiki/tools |
+| Status     | Product; do not train more v7 | Active learning path                           | Unchanged kernel                      |
+
 
 Do not `--resume` across vocab, architecture, or mix changes. Do not resume a
 cabinet BPE into TinyStories. Do not train more v7 or rebuild its mix for alias
 fixes. Pre-0.1.0 English runs (`english_phase1` on wiki prose, fact-inject, v10
 mixes) and the 0.1.0 TinyStories checkpoints live under
-[`legacy/`](legacy/README_legacy.md). `data/train.txt` is not the English corpus.
-
+`[legacy/](legacy/README_legacy.md)`. `data/train.txt` is not the English corpus.
 
 ```bash
 # Python 3.11 or 3.12
@@ -66,7 +87,7 @@ unknown follow-ups list **related trained questions** (UI chips / `:related`)
 instead of auto-Wikipedia; `:search` or a cold-start `What is …` still hits
 Wikipedia. Wikipedia hits are appended to `output/cabinet_learned.jsonl`
 and replayed later; they are not trained into the checkpoint. Central UI:
-`python App.py` (http://127.0.0.1:7860) — model selector loads one checkpoint
+`python App.py` ([http://127.0.0.1:7860](http://127.0.0.1:7860)) — model selector loads one checkpoint
 into chat (Metal) and npzviewer (mmap). The **Train** tab reads logs only.
 Switching models restarts the process. Standalone `webui.py` / `npzviewer.py`
 / `trainmon.py` (7862) still work; do not run chat UIs next to `App.py` or
@@ -81,10 +102,10 @@ Active English recipe: `setup/english_tinystories_c1024_l6_config.json` on
 16,384 tokens/step). Build the packed shards with
 `python tools/prepare_tinystories.py --pack-stories` after the plain prepare
 has written `data/tinystories/`. Setup notes:
-[`setup/english_tinystories_c1024_l6/README.md`](setup/english_tinystories_c1024_l6/README.md).
+`[setup/english_tinystories_c1024_l6/README.md](setup/english_tinystories_c1024_l6/README.md)`.
 The 0.1.0 c256 recipe, the step-2000 smoke, and older shape references
 (`story_c256_l6`, `story_sub1m`, cabinet recipes) are under
-[`legacy/`](legacy/README_legacy.md).
+`[legacy/](legacy/README_legacy.md)`.
 
 Chat cabinet (memorize your Q&A, not Wikipedia): native lines in
 `data/user_facts.txt` and `data/facts/*.txt`, mix with `tools/make_fact_mix.py`,
@@ -97,36 +118,39 @@ Keep the lid open on this fanless Air; long GEMMs will thermal-throttle.
 Live path: `model/mlx/ops.py` (forward primitives + hand VJPs). Do not use
 `mx.value_and_grad`, `mlx.nn`, or `mlx.optimizers` on the train loop.
 
-
 ## Progress (0.0.1 → 0.1.0)
 
 Software (see `CHANGELOG.md` for detail):
 
-| Ver | Leap |
-|---|---|
-| 0.0.1–0.0.2 | Plan → MLX port (explicit VJPs, 2 GB budget) |
-| 0.0.3 | Fast BPE + train preflight |
-| 0.0.4 | Memory controller (never changes C/L/H) |
-| 0.0.5 | Sequential layer streaming |
-| 0.0.6 | Fact pipelines + Wikidata packs |
-| 0.0.7 | Router (cabinet → calc → Wikipedia) + web UI |
-| 0.0.8 | `App.py` (chat + pick-a-neuron + selector), related chips, topic/`the` aliases |
-| 0.0.9 | Unguided trainer kernel + autotrainer daemon + train monitor |
-| 0.1.0 | Dual brain: frozen v7/v9 cabinet + TinyStories English; wiki-prose English → `legacy/` |
-| 0.1.1 | Story-packed TinyStories, C=1024 L=6; 0.1.0 runs and setup JSON → `legacy/` |
+
+| Ver         | Leap                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------- |
+| 0.0.1–0.0.2 | Plan → MLX port (explicit VJPs, 2 GB budget)                                           |
+| 0.0.3       | Fast BPE + train preflight                                                             |
+| 0.0.4       | Memory controller (never changes C/L/H)                                                |
+| 0.0.5       | Sequential layer streaming                                                             |
+| 0.0.6       | Fact pipelines + Wikidata packs                                                        |
+| 0.0.7       | Router (cabinet → calc → Wikipedia) + web UI                                           |
+| 0.0.8       | `App.py` (chat + pick-a-neuron + selector), related chips, topic/`the` aliases         |
+| 0.0.9       | Unguided trainer kernel + autotrainer daemon + train monitor                           |
+| 0.1.0       | Dual brain: frozen v7/v9 cabinet + TinyStories English; wiki-prose English → `legacy/` |
+| 0.1.1       | Story-packed TinyStories, C=1024 L=6; 0.1.0 runs and setup JSON → `legacy/`            |
+
 
 Cabinet checkpoints under `output/checkpoints/`:
 
-| CKPT | Shape | Params | Notes |
-|---|---|---:|---|
-| v1 | C512 L6 T256 | — | first cabinet |
-| v2 | C512 L6 · small V | — | recitation emerging |
-| v3 | C512 L12 | — | deeper on dirty multi-answer mix → worse |
-| **v4** | C512 L6 | **20.5M** | fair mix; best clean France→Paris |
-| v5 | C512 L6 | — | broader 20× topics |
-| v6 | C512 L16 T512 | — | linked/learned fold-in |
-| **v7** | C512 L16 T512 | **54.6M** | current product; do not train more |
-| `user_facts_tiny` | C16 L2 T16 | 0.02M | weight inspector only |
+
+| CKPT              | Shape             | Params    | Notes                                    |
+| ----------------- | ----------------- | --------- | ---------------------------------------- |
+| v1                | C512 L6 T256      | —         | first cabinet                            |
+| v2                | C512 L6 · small V | —         | recitation emerging                      |
+| v3                | C512 L12          | —         | deeper on dirty multi-answer mix → worse |
+| **v4**            | C512 L6           | **20.5M** | fair mix; best clean France→Paris        |
+| v5                | C512 L6           | —         | broader 20× topics                       |
+| v6                | C512 L16 T512     | —         | linked/learned fold-in                   |
+| **v7**            | C512 L16 T512     | **54.6M** | current product; do not train more       |
+| `user_facts_tiny` | C16 L2 T16        | 0.02M     | weight inspector only                    |
+
 
 Lessons: dirty multi-answer mixes fail; fair one-answer mixes stick; router aliases
 fix **lookup**, not binding; never `--resume` across vocab / arch / mix changes.

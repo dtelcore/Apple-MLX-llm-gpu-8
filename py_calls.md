@@ -29,6 +29,7 @@ Shared flag groups live in [`cli_common.py`](cli_common.py) and are referenced b
 | `--trace-neurons` | flag | off | Per-layer activation stats |
 | `--trace-vectorization` | flag | off | GEMM shapes / CUDA grid |
 | `--trace-every` | int | `None` | Every N steps (train default ≈ 10% of steps; generate/interactive default every step) |
+| `--no-traces` | flag | off | All channels off, including quarterly forced dumps. Wins over `--verbose` / `--trace-*`. Probes still run. |
 
 ### Runtime observability `(shared: obs)` — Stage 3.1, off by default
 

@@ -39,6 +39,8 @@ class TraceContext:
         # trace_every may be None here (meaning "not explicitly set"); callers
         # should resolve it via cli_common.build_tracer, which overrides it
         # with a context-appropriate default before this context is used.
+        if getattr(args, "no_traces", False):
+            return cls()
         raw_trace_every = getattr(args, "trace_every", None)
         return cls(
             verbose=args.verbose,

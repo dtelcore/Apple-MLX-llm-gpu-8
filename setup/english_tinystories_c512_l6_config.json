@@ -3,7 +3,7 @@
     "name": "english_tinystories_c1024_l6",
     "vocab_size": null,
     "max_len": 256,
-    "embedding_dim": 1024,
+    "embedding_dim": 512,
     "num_heads": 8,
     "num_layers": 6,
     "dropout_prob": 0.0,
@@ -12,8 +12,8 @@
     "pos_encoding": "rope",
     "init_scale": 0.02,
     "residual_scale": true,
-    "layer_strategy": "stream",
-    "description": "v0.1.1 open English. C=1024 L=6 H=8 head=128 T=256, layer stream, GPT-2 residual scale 1/sqrt(2L). Vocab is the 0.1.0 TinyStories BPE plus <|endofstory|>. Fresh weights. Do not --resume english_tinystories_c256_l6 or the 2000 smoke. 2 GB cap hardcoded."
+    "layer_strategy": "resident",
+    "description": "v0.1.1 open English. C=512 L=6 H=8 head=128 T=64, layer stream, GPT-2 residual scale 1/sqrt(2L). Vocab is the 0.1.0 TinyStories BPE plus <|endofstory|>. Fresh weights. Do not --resume english_tinystories_c256_l6 or the 2000 smoke. 2 GB cap hardcoded."
   },
   "dataset": {
     "name": "tinystories",
@@ -26,23 +26,23 @@
   },
   "weight_initialization": {},
   "hyperparameters": {
-    "name": "english_tinystories_c1024_l6",
+    "name": "english_tinystories_c512_l6",
     "learning_rate": 0.00012,
     "weight_decay": 0.05,
-    "batch_size": 2,
+    "batch_size": 16,
     "num_epochs": 1,
     "warmup_steps": 600,
     "gradient_clip": 1.0,
-    "gradient_accumulation_steps": 8,
+    "gradient_accumulation_steps": 3,
     "window_stride": 128,
     "min_lr_ratio": 0.05,
     "optimizer": "adamw",
     "beta1": 0.9,
-    "beta2": 0.999,
+    "beta2": 0.999, 
     "epsilon": 1e-8
   },
   "metadata": {
-    "created": "english-tinystories-c1024-l6",
+    "created": "english-tinystories-c512-l6",
     "description": "v0.1.1. Story-packed TinyStories: <|endofstory|> between stories, windows stay inside one story, short stories padded. 16384 tokens per optimizer step (batch 4 x accum 16 x T 256). Fresh init. Pass --steps as the cosine length. Do not --resume a finished budget to extend it."
   }
 }

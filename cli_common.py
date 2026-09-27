@@ -32,6 +32,11 @@ def add_trace_args(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--trace-neurons", action="store_true", help="Dump per-layer activation mean/std/norm on traced steps")
     group.add_argument("--trace-vectorization", action="store_true", help="Print GEMM shapes and CUDA grid/block launches on traced steps")
     group.add_argument("--trace-every", type=int, default=None, help="Emit traces every N steps (default: 10%% of total training steps; ignored for generate/interactive where it defaults to every step)")
+    group.add_argument(
+        "--no-traces", action="store_true",
+        help="Disable every trace channel, including the full dumps forced on quarterly "
+             "milestones. Wins over --verbose and --trace-*. Generate probes still run.",
+    )
 
 
 def add_generate_decode_args(parser: argparse.ArgumentParser) -> None:
@@ -302,6 +307,11 @@ def add_tokenizer_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def traces_disabled(args) -> bool:
+    """True when --no-traces is set. Quarterly forced dumps must honor this too."""
+    return bool(getattr(args, "no_traces", False))
+
+
 def build_tracer(args, default_trace_every: int = 100) -> TraceContext:
     """Build a TraceContext, resolving --trace-every to `default_trace_every`
     when the user didn't pass it explicitly (args.trace_every is None)."""
@@ -412,7 +422,7 @@ def add_probe_args(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--no-generate-probe", action="store_true",
         help="Skip mid-training text generation at quarterly milestones "
-             "(still saves quarter_XX/, val metrics, and full traces)",
+             "(still saves quarter_XX/ and val metrics; full traces still run unless --no-traces)",
     )
     group.add_argument(
         "--generate-probe-prompt", type=str, default="once upon a",
@@ -664,6 +674,14 @@ def _prompt_obs_group(args: argparse.Namespace) -> None:
 
 
 def _prompt_trace_group(args: argparse.Namespace, *, generate_style: bool = False) -> None:
+    _ask_bool(args, "no_traces", "Disable all traces, including quarterly dumps (--no-traces)?", False)
+    if traces_disabled(args):
+        args.verbose = False
+        args.trace_logits = False
+        args.trace_tokens = False
+        args.trace_neurons = False
+        args.trace_vectorization = False
+        return
     _ask_bool(args, "verbose", "Enable --verbose?", False)
     _ask_bool(args, "trace_logits", "Enable --trace-logits?", False)
     _ask_bool(args, "trace_tokens", "Enable --trace-tokens?", False)
