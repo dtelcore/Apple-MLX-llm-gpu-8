@@ -469,5 +469,6 @@ def create_app(*, log_dir: Optional[Path] = None, runs_root: Optional[Path] = No
         template_folder=str(_APP_DIR),
         static_folder=None,
     )
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.register_blueprint(create_blueprint(log_dir=log_dir, runs_root=runs_root, api_base=""))
     return app

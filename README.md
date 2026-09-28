@@ -3,6 +3,14 @@
 # wallclock , batch and accum timing incl mem
 
 
+
+PYTHONUNBUFFERED=1 ./venv/bin/python output/runs/english_tinystories_c512_l6_10_smoke_b1_accum1_10000_1250000/probe_10000/run_n50.py
+
+Probe, just swap 
+
+
+
+
 |                    |                |                     |                     |                        |                      |                            |
 | ------------------ | -------------- | ------------------- | ------------------- | ---------------------- | -------------------- | -------------------------- |
 | **Physical Batch** | **Grad Accum** | **Effective Batch** | **Steps per Epoch** | **Est. Time per Step** | **Est. Total Hours** | **Est. VRAM (with GC)**    |

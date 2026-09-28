@@ -283,15 +283,16 @@
     function smoothPts(pts) {
       const n = pts.length;
       if (n < 4) return pts.slice();
-      const w = Math.max(3, Math.round(n / 12));
+      const w = Math.max(5, Math.round(n / 8));
       const half = Math.floor(w / 2);
       const out = [];
       for (let i = 0; i < n; i++) {
-        let sum = 0, c = 0;
-        for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
-          sum += pts[j].y; c++;
-        }
-        out.push({ x: pts[i].x, y: sum / c });
+        const bucket = [];
+        for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) bucket.push(pts[j].y);
+        bucket.sort((a, b) => a - b);
+        const mid = Math.floor(bucket.length / 2);
+        const y = bucket.length % 2 ? bucket[mid] : (bucket[mid - 1] + bucket[mid]) / 2;
+        out.push({ x: pts[i].x, y });
       }
       return out;
     }
@@ -306,13 +307,24 @@
       return { minY: minY - span * 0.14, maxY: maxY + span * 0.14 };
     }
 
-    function strokeGaps(ctx, pts, X, Y, gap) {
+    function strokeGaps(ctx, pts, X, Y, gap, yLim) {
       let open = false;
       pts.forEach((p, i) => {
+        const outside = yLim && (p.y < yLim.minY || p.y > yLim.maxY);
+        if (outside) {
+          if (open) { ctx.stroke(); open = false; }
+          return;
+        }
+        const prev = i > 0 ? pts[i - 1] : null;
+        const prevOut = prev && yLim && (prev.y < yLim.minY || prev.y > yLim.maxY);
+        const broke = prevOut || (prev && (p.x - prev.x) > gap);
         const px = X(p.x), py = Y(p.y);
-        const broke = i > 0 && (p.x - pts[i - 1].x) > gap;
-        if (!open || broke) { if (open) ctx.stroke(); ctx.beginPath(); ctx.moveTo(px, py); open = true; }
-        else ctx.lineTo(px, py);
+        if (!open || broke) {
+          if (open) ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          open = true;
+        } else ctx.lineTo(px, py);
       });
       if (open) ctx.stroke();
     }
@@ -376,13 +388,10 @@
             ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 4, 0, Math.PI * 2); ctx.fill();
           });
         } else {
-          ctx.globalAlpha = 0.45;
-          ctx.lineWidth = 1;
-          strokeGaps(ctx, pts, X, Y, gap);
-          ctx.globalAlpha = 1;
+          ctx.strokeStyle = color;
           ctx.lineWidth = 2.2;
           strokeGaps(ctx, trend, X, Y, gap);
-          const last = pts[pts.length - 1];
+          const last = trend.length ? trend[trend.length - 1] : pts[pts.length - 1];
           ctx.beginPath(); ctx.arc(X(last.x), Y(last.y), 3.6, 0, Math.PI * 2); ctx.fill();
         }
       }
@@ -554,7 +563,7 @@
     followEl.addEventListener("change", tick);
     window.addEventListener("resize", () => tick());
     tick();
-    setInterval(tick, 2000);
+    setInterval(tick, 500);
   </script>
 </body>
 </html>
