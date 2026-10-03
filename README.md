@@ -62,6 +62,32 @@ fixes. Pre-0.1.0 English runs (`english_phase1` on wiki prose, fact-inject, v10
 mixes) and the 0.1.0 TinyStories checkpoints live under
 `[legacy/](legacy/README_legacy.md)`. `data/train.txt` is not the English corpus.
 
+## Where this sits vs GPT-2
+
+`chat_facts_v4` and `chat_facts_v7` next to public GPT-2 small. v7 is about
+half the parameters and is a recitation cabinet, not an open-ended language
+model. Same stack as above: **hand VJPs** (no `mx.value_and_grad` on the train
+loop), a hardcoded **2 GB** Metal budget with layer streaming, and a Python
+router (cabinet → calc → English → wiki/tools).
+
+
+|                         | **chat_facts_v4**                                                                                              | **chat_facts_v7**                                                                                                                                                    | **GPT-2 small**                                                          |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| C                       | 512                                                                                                            | 512                                                                                                                                                                  | 768                                                                      |
+| L                       | 6                                                                                                              | 16                                                                                                                                                                   | 12                                                                       |
+| H                       | 8                                                                                                              | 8                                                                                                                                                                    | 12                                                                       |
+| T / context             | 256                                                                                                            | 512                                                                                                                                                                  | 1024                                                                     |
+| Vocab                   | ≈1587 (config; BPE from the mix)                                                                               | 4086                                                                                                                                                                 | 50257                                                                    |
+| Params (approx)         | **20.54M** (counted from `weights.npz`)                                                                        | **54.61M**                                                                                                                                                           | ~124M                                                                    |
+| Training objective      | Exact `User:` → stored answer on `data/chat_facts.jsonl`                                                       | Same, linked capitals, on `data/chat_facts_v7.jsonl`                                                                                                                 | Open web-text LM                                                         |
+| Typical loss on cabinet | ≈0.033 at step 400                                                                                             | ≈0.039 at step 1000                                                                                                                                                  | — (not a cabinet run)                                                    |
+| Notes                   | stream, `residual_scale`, RoPE + RMSNorm. Weights ≈82 MB. Fair ~105 unique ×300. Best clean France→Paris.     | stream. Weights ≈218.5 MB. Config name may still say L=6; trust `num_layers=16` (164 tensors). Linked capitals + related UX. Do not train more or rebuild the mix. | Learned absolute pos + LayerNorm. Autograd stack. Public reference only. |
+
+
+Forward cost scales about **L·T·C²** (order of magnitude, not a measured
+TFLOP count). v7 is deeper and has a longer context than v4; GPT-2 small is
+wider and longer again.
+
 ```bash
 # Python 3.11 or 3.12
 python3.11 -m venv venv && source venv/bin/activate
